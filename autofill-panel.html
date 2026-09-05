@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>自动填表配置面板</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; background: #f5f6f8; color: #2c3e50; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    h2 { font-size: 15px; margin: 0 0 8px; }
+    h3 { font-size: 13px; margin: 0 0 6px; color: #555; }
+    .card { background: #fff; padding: 12px; border-radius: 4px; margin-bottom: 12px; border: 1px solid #e0e0e0; }
+    .domain-tag { background: #e3f2fd; padding: 6px 12px; border-radius: 4px; font-size: 13px; display: inline-block; margin-bottom: 8px; }
+    .domain-tag code { color: #1976d2; font-weight: bold; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+    .row label { width: 90px; font-size: 13px; color: #555; }
+    .row input, .row select { flex: 1; min-width: 120px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 13px; }
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    button { padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
+    button:hover { background: #f0f0f0; }
+    button.primary { background: #1976d2; color: #fff; border-color: #1976d2; }
+    button.primary:hover { background: #1565c0; }
+    button.danger { color: #e74c3c; border-color: #e74c3c; }
+    .action { background: #fafafa; padding: 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #eee; }
+    .action-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .action-type { font-weight: bold; color: #1976d2; font-size: 13px; }
+    .op-move { padding: 2px 8px; font-size: 12px; background: #e3f2fd; color: #1976d2; border-color: #bbdefb; }
+    .op-move:hover { background: #bbdefb; }
+    .op-move:disabled { opacity: 0.3; cursor: not-allowed; }
+    .insert-bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #eee; }
+    .insert-bar .label { color: #999; font-size: 12px; margin-right: 4px; }
+    .insert-bar button { padding: 3px 8px; font-size: 12px; background: #fff3e0; border-color: #ffe0b2; color: #e65100; }
+    .insert-bar button:hover { background: #ffe0b2; }
+    .sel-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; padding: 4px 6px; background: #f5f5f5; border-radius: 3px; }
+    .sel-row code { flex: 1; word-break: break-all; }
+    .sel-row .sel-use { padding: 3px 8px; font-size: 12px; background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9; }
+    .sel-row .sel-use:hover { background: #c8e6c9; }
+    .empty { text-align: center; padding: 24px; color: #999; font-size: 13px; }
+    .msg { padding: 8px; border-radius: 4px; font-size: 13px; display: none; margin-top: 8px; }
+    .msg.success { display: block; background: #e8f5e9; color: #2e7d32; }
+    .msg.error { display: block; background: #ffebee; color: #c62828; }
+    .msg.info { display: block; background: #e3f2fd; color: #1565c0; }
+    .tabs { display: flex; gap: 4px; border-bottom: 2px solid #e0e0e0; margin-bottom: 12px; }
+    .tab { padding: 8px 16px; cursor: pointer; border: 0; background: transparent; border-radius: 0; color: #666; }
+    .tab.active { color: #1976d2; border-bottom: 2px solid #1976d2; margin-bottom: -2px; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
+    th { background: #f5f5f5; font-weight: bold; }
+    .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; }
+    .badge.daily { background: #e8f5e9; color: #2e7d32; }
+    .badge.weekly { background: #e3f2fd; color: #1565c0; }
+    .badge.monthly { background: #fff3e0; color: #e65100; }
+    .badge.once { background: #f3e5f5; color: #6a1b9a; }
+    .badge.active { background: #ff5722; color: #fff; }
+    code.inline { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; font-size: 12px; color: #c7254e; }
+
+    /* ---------- 响应式：手机端 ---------- */
+    .mobile-tip { display: none; background: #fff3e0; border: 1px solid #ffe0b2; color: #e65100; padding: 10px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
+    .mobile-tip b { color: #bf360c; }
+    .qr-card { display: flex; align-items: center; gap: 12px; background: #e3f2fd; padding: 10px; border-radius: 4px; margin-bottom: 12px; }
+    .qr-card img { width: 110px; height: 110px; background: #fff; border: 1px solid #90caf9; padding: 4px; }
+    .qr-card .qr-text { font-size: 13px; color: #1565c0; line-height: 1.7; }
+    .qr-card .qr-text code { background: #fff; padding: 2px 6px; border-radius: 3px; color: #0d47a1; font-weight: bold; }
+    @media (max-width: 768px) {
+      body { padding: 10px; }
+      h1 { font-size: 16px; }
+      .row label { width: 100%; }
+      .row input, .row select { width: 100%; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .toolbar button { width: 100%; }
+      .action { padding: 8px; }
+      #runProgress { height: 50vh; font-size: 10px; }
+      .card { padding: 10px; }
+      table { font-size: 12px; }
+      th, td { padding: 4px 6px; }
+      .mobile-tip { display: block; }
+      .qr-card { display: none; }  /* 手机端自己看自己，不需要二维码 */
+    }
+  </style>
+</head>
+<body>
+  <h1>自动填表配置面板</h1>
+
+  <!-- 手机端提示：告诉用户这是远端控制台 -->
+  <div class="mobile-tip" id="mobileTip">
+    📱 <b>你现在在手机上</b>。这个页面是<b>控制台</b>，实际执行还是在电脑上。手机只能<b>看日志、触发执行</b>，自动化任务由电脑后台完成。
+  </div>
+
+  <!-- PC 端：给手机扫的二维码（异步加载） -->
+  <div class="qr-card" id="qrCard" style="display:none">
+    <img id="qrImg" alt="二维码">
+    <div class="qr-text">
+      📱 <b>手机扫码加入控制台</b><br>
+      手机连同一 WiFi，浏览器打开：<br>
+      <code id="qrUrl">--</code>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="domain-tag">当前域名：<code id="currentDomain">未选择</code></div>
+    <div class="row" style="margin-top:8px">
+      <label>域名</label>
+      <input id="domainInput" placeholder="newxiadan.3f8cz.com">
+    </div>
+    <div class="row">
+      <label>ddddocr</label>
+      <input id="ocrEndpoint" placeholder="http://127.0.0.1:7777/ocr">
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button id="runAll" style="background:#1976d2;color:#fff;border:0;padding:8px 20px;font-size:14px;font-weight:bold;border-radius:3px;cursor:pointer">🚀 一键执行全部</button>
+    <span style="color:#999;font-size:12px;margin:0 8px">执行:</span>
+    <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runLogin" checked>
+登录页</label>
+    <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runClaim" checked> 登
+录后领取页</label>
+    <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runCdk" checked> CD
+K 页</label>
+    <span style="color:#999;font-size:12px;margin:0 8px">|</span>
+    <button id="save">保存</button>
+    <button id="testOcr">测试 OCR</button>
+    <button id="export">导出 JSON</button>
+    <button id="import">导入 JSON</button>
+    <button id="clear">清空</button>
+  </div>
+
+  <!-- 一键执行进度面板 -->
+  <div class="card" id="runPanel" style="display:none">
+    <h2>
+      <span id="runTitle">🚀 执行中</span>
+      <span style="font-weight:normal;color:#999;font-size:12px" id="runHint"></span>
+    </h2>
+    <div id="runProgress" style="background:#f5f5f5;padding:8px;border-radius:3px;height:280px;overflow:auto;font-family:monospace;font-size:11px;line-height:1.6;white-space:pre-wrap"></div>
+    <div style="margin-top:8px;display:flex;gap:6px">
+      <button id="pauseBtn" onclick="togglePause()" style="background:#ff9800;color:#fff;border-color:#ff9800">⏸ 暂停</button>
+      <button id="cancelBtn" onclick="cancelTask()" class="danger">⏹ 取消任务</button>
+      <button id="closeRun">关闭面板</button>
+    </div>
+  </div>
+
+  <!-- 账号管理 -->
+  <div class="card">
+    <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（油猴会按顺序逐个登录/兑换）</span></h2>
+    <table id="accountTable">
+      <thead>
+        <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div style="margin-top:8px">
+      <button class="primary" id="addAccount">+ 添加账号</button>
+    </div>
+  </div>
+
+  <!-- CDK 列表 -->
+  <div class="card">
+    <h2>CDK 列表</h2>
+    <p style="font-size:12px;color:#666;margin:0 0 8px">
+      调度：<span class="badge daily">每日</span> 每天激活
+      <span class="badge weekly">每7日</span> 距起始日 0/7/14... 天激活
+      <span class="badge monthly">每30日</span> 距起始日 0/30/60... 天激活
+      <span class="badge once">一次性</span> 用一次后失效
+    </p>
+    <table id="cdkTable">
+      <thead>
+        <tr><th>CDK</th><th>调度</th><th>起始日期</th><th>今日</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div style="margin-top:8px">
+      <button class="primary" id="addCdk">+ 添加 CDK</button>
+    </div>
+    <div id="todayActive" class="msg info" style="margin-top:8px"></div>
+  </div>
+
+  <!-- 页面配置 -->
+  <div class="card">
+    <h2>页面配置</h2>
+    <div class="tabs">
+      <button class="tab active" data-page="login">登录页 (/player/login)</button>
+      <button class="tab" data-page="cdk">CDK 页 (/index/cdk)</button>
+      <button class="tab" data-page="claim">登录后领取 (/player/index)</button>
+    </div>
+    <div id="pageConfig"></div>
+  </div>
+
+  <!-- HTML 转选择器 -->
+  <div class="card">
+    <h2>HTML 转选择器 <span style="font-weight:normal;color:#999;font-size:12px">（F12 → 选元素 → 右键 → Copy → Copy outerHTML → 粘贴到此）</span></h2>
+    <textarea id="htmlInput" placeholder="粘贴 HTML 片段，自动解析" style="width:100%;min-height:50px;padding:6px;border:1px solid #ddd;border-radius:3px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
+    <div id="htmlResult" style="margin-top:8px;display:none"></div>
+  </div>
+
+  <!-- 占位符说明 -->
+  <div class="card">
+    <h2>答案占位符</h2>
+    <p style="font-size:13px;margin:0">
+      在"答案"里可以用：
+      <code class="inline">{username}</code> 当前账号 ·
+      <code class="inline">{password}</code> 当前密码 ·
+      <code class="inline">{cdk}</code> 当前 CDK ·
+      <code class="inline">{date}</code> 今天 YYYY-MM-DD ·
+      <code class="inline">{time}</code> 当前时间 HH:MM:SS
+    </p>
+  </div>
+
+  <div id="msg" class="msg"></div>
+  <input type="file" id="importFile" accept=".json" style="display:none">
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const STORAGE_KEY = "autofill_configs_v2";
+    let pickerCallback = null;
+    let currentPage = "login";
+
+    // 后端地址：自动适配（本机 localhost / 局域网 IP 都用 location.origin）
+    const SERVER = window.location.origin || ("http://" + window.location.host);
+    // 默认 OCR 端点：同源
+    const DEFAULT_OCR = SERVER + "/ocr";
+
+    // 默认配置（按用户给的网址初始化）
+    function defaultConfig() {
+      return {
+        domain: "newxiadan.3f8cz.com",
+        ocrEndpoint: DEFAULT_OCR,
+        pages: {
+          login: {
+            label: "登录页",
+            urlPattern: "/player/login",
+            actions: [
+              { type: "fill", selector: "input[placeholder*='账']", value: "{username}" },
+              { type: "fill", selector: "input[type=password]", value: "{password}" },
+              { type: "captcha", selector: "img[src*='captcha'], img.captcha, img.verify", inputSelector: "input[placeholder*='验'], input[name*='code']" },
+              { type: "click", selector: "button[type=submit], button.login-btn, .login-btn" }
+            ]
+          },
+          claim: {
+            label: "登录后领取页",
+            urlPattern: "/player/index",
+            autoGoto: false,
+            actions: []
+          },
+          cdk: {
+            label: "CDK兑换页",
+            urlPattern: "/index/cdk",
+            actions: [
+              { type: "fill", selector: "input[placeholder*='CDK'], input[name*='cdk'], input[name*='code']", value: "{cdk}" },
+              { type: "captcha", selector: "img[src*='captcha'], img.captcha, img.verify", inputSelector: "input[placeholder*='验'], input[name*='code']" },
+              { type: "click", selector: "button[type=submit], button.submit-btn, .submit" }
+            ]
+          }
+        },
+        accounts: [],
+        cdkList: []
+      };
+    }
+
+    let currentConfig = defaultConfig();
+    let saveConfigTimer = null;  // 防抖同步到后端
+
+    // 异步同步配置到后端（防抖 1s）
+    function syncConfigToServer() {
+      clearTimeout(saveConfigTimer);
+      saveConfigTimer = setTimeout(async () => {
+        try {
+          await fetch(SERVER + "/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(currentConfig)
+          });
+        } catch (e) { /* 离线时忽略，不影响前端 */ }
+      }, 1000);
+    }
+
+    // 启动时从后端拉配置（优先用后端的，本地 localStorage 作为兜底）
+    async function loadConfigFromServer() {
+      try {
+        const r = await fetch(SERVER + "/api/config");
+        if (r.ok) {
+          const data = await r.json();
+          if (data && (data.domain || data.accounts || data.pages)) {
+            currentConfig = data;
+            // 缺字段时补齐
+            if (!currentConfig.pages) currentConfig.pages = defaultConfig().pages;
+            if (!currentConfig.accounts) currentConfig.accounts = [];
+            if (!currentConfig.cdkList) currentConfig.cdkList = [];
+            // 启动时也补齐 pages：任何缺/坏 page 都用 defaultConfig 兜底
+            const defPages = defaultConfig().pages;
+            for (const key in defPages) {
+              if (!currentConfig.pages[key] || !Array.isArray(currentConfig.pages[key].actions)) {
+                currentConfig.pages[key] = JSON.parse(JSON.stringify(defPages[key]));
+              }
+            }
+            return true;
+          }
+        }
+      } catch (e) { /* 后端没起就用本地 */ }
+      return false;
+    }
+
+    function loadAll() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+    }
+    function saveAll(c) { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); }
+    function esc(s) { return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+    function showMsg(type, msg) {
+      const el = $("msg");
+      el.className = "msg " + type;
+      el.textContent = msg;
+    }
+    function typeLabel(t) {
+      return { fill: "填字段", click: "点按钮", select: "下拉框", captcha: "验证码" }[t] || t;
+    }
+
+    // CDK 调度判断
+    function isActiveToday(cdk, today = new Date()) {
+      if (!cdk.value || !cdk.startDate) return false;
+      const start = new Date(cdk.startDate + "T00:00:00");
+      if (isNaN(start.getTime())) return false;
+      const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const diffDays = Math.floor((t - start) / 86400000);
+      if (diffDays < 0) return false;
+      switch (cdk.schedule) {
+        case "daily": return true;
+        case "weekly": return diffDays % 7 === 0;
+        case "monthly": return diffDays % 30 === 0;
+        case "once": return !cdk.used;
+      }
+      return false;
+    }
+
+    // 渲染账号表
+    function renderAccounts() {
+      const tbody = $("accountTable").querySelector("tbody");
+      if (currentConfig.accounts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">还没有账号</td></tr>';
+        return;
+      }
+      tbody.innerHTML = currentConfig.accounts.map((a, i) =>
+        `<tr>
+          <td><input value="${esc(a.username)}" onchange="updAccount(${i},'username',this.value)"></td>
+          <td><input type="password" value="${esc(a.password)}" onchange="updAccount(${i},'password',this.value)"></td>
+          <td><input type="checkbox" ${a.enabled !== false ? "checked" : ""} onchange="updAccount(${i},'enabled',this.checked)"></td>
+          <td><button class="danger" onclick="removeAccount(${i})">删除</button></td>
+        </tr>`
+      ).join("");
+    }
+    function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; }
+    function removeAccount(i) { currentConfig.accounts.splice(i, 1); renderAccounts(); }
+
+    // 渲染 CDK 表
+    function renderCdk() {
+      const tbody = $("cdkTable").querySelector("tbody");
+      if (currentConfig.cdkList.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">还没有 CDK</td></tr>';
+        $("todayActive").style.display = "none";
+        return;
+      }
+      const today = new Date();
+      tbody.innerHTML = currentConfig.cdkList.map((c, i) => {
+        const active = isActiveToday(c, today);
+        return `<tr>
+          <td><input value="${esc(c.value)}" onchange="updCdk(${i},'value',this.value)"></td>
+          <td>
+            <select onchange="updCdk(${i},'schedule',this.value)">
+              <option value="daily" ${c.schedule==='daily'?'selected':''}>每日</option>
+              <option value="weekly" ${c.schedule==='weekly'?'selected':''}>每7日</option>
+              <option value="monthly" ${c.schedule==='monthly'?'selected':''}>每30日</option>
+              <option value="once" ${c.schedule==='once'?'selected':''}>一次性</option>
+            </select>
+          </td>
+          <td><input type="date" value="${esc(c.startDate)}" onchange="updCdk(${i},'startDate',this.value)"></td>
+          <td>${active ? '<span class="badge active">激活</span>' : '<span style="color:#999">-</span>'}</td>
+          <td><button class="danger" onclick="removeCdk(${i})">删除</button></td>
+        </tr>`;
+      }).join("");
+
+      const actives = currentConfig.cdkList.filter(c => isActiveToday(c, today));
+      if (actives.length) {
+        $("todayActive").textContent = "今天激活：" + actives.map(c => c.value).join(" / ");
+        $("todayActive").style.display = "block";
+      } else {
+        $("todayActive").textContent = "今天没有激活的 CDK";
+        $("todayActive").style.display = "block";
+      }
+    }
+    function updCdk(i, k, v) { currentConfig.cdkList[i][k] = v; renderCdk(); }
+    function removeCdk(i) { currentConfig.cdkList.splice(i, 1); renderCdk(); }
+
+    // 渲染页面操作配置
+    function renderPageConfig() {
+      const page = currentConfig.pages[currentPage];
+      const list = $("pageConfig");
+      const actions = page.actions;
+      const addBtns = `
+        <div class="toolbar">
+          <button class="primary" onclick="addPageAction('fill')">+ 填字段</button>
+          <button class="primary" onclick="addPageAction('click')">+ 点按钮</button>
+          <button class="primary" onclick="addPageAction('select')">+ 下拉框</button>
+          <button class="primary" onclick="addPageAction('captcha')">+ 验证码</button>
+        </div>
+      `;
+      if (actions.length === 0) {
+        list.innerHTML = addBtns + '<div class="empty">还没有操作</div>';
+        return;
+      }
+      list.innerHTML = addBtns + actions.map((a, i) => {
+        const last = i === actions.length - 1;
+        const head = `<div class="action-head">
+          <span class="action-type">${typeLabel(a.type)} #${i+1}</span>
+          <div>
+            <button class="op-move" onclick="movePageAction(${i},-1)" title="上移" ${i===0?'disabled':''}>↑</button>
+            <button class="op-move" onclick="movePageAction(${i},1)" title="下移" ${last?'disabled':''}>↓</button>
+            <button class="danger" onclick="removePageAction(${i})">删除</button>
+          </div>
+        </div>`;
+        const insertBar = `<div class="insert-bar">
+          <span class="label">+ 在下方插入：</span>
+          <button onclick="insertPageActionBelow(${i},'fill')">填字段</button>
+          <button onclick="insertPageActionBelow(${i},'click')">点按钮</button>
+          <button onclick="insertPageActionBelow(${i},'select')">下拉框</button>
+          <button onclick="insertPageActionBelow(${i},'captcha')">验证码</button>
+        </div>`;
+        if (a.type === "fill") {
+          return `<div class="action">${head}
+            <div class="row"><label>选择器</label>
+              <input value="${esc(a.selector)}" placeholder="input[name=xxx]" onchange="updPageAction(${i},'selector',this.value)">
+              <button onclick="openPicker(${i},'selector')">点选</button>
+            </div>
+            <div class="row"><label>答案</label>
+              <input value="${esc(a.value)}" placeholder="{username} / {cdk} / 字面量" onchange="updPageAction(${i},'value',this.value)">
+            </div>
+            ${insertBar}
+          </div>`;
+        }
+        if (a.type === "click") {
+          return `<div class="action">${head}
+            <div class="row"><label>选择器</label>
+              <input value="${esc(a.selector)}" placeholder="button.submit" onchange="updPageAction(${i},'selector',this.value)">
+              <button onclick="openPicker(${i},'selector')">点选</button>
+            </div>
+            ${insertBar}
+          </div>`;
+        }
+        if (a.type === "select") {
+          return `<div class="action">${head}
+            <div class="row"><label>下拉框</label>
+              <input value="${esc(a.selector)}" placeholder="select[name=area]" onchange="updPageAction(${i},'selector',this.value)">
+              <button onclick="openPicker(${i},'selector')">点选</button>
+            </div>
+            <div class="row"><label>选项</label>
+              <input value="${esc(a.value)}" placeholder="填 2 = 选第2个；填 华东一区 = 按文字匹配" onchange="updPageAction(${i},'value',this.value)">
+            </div>
+            ${insertBar}
+          </div>`;
+        }
+        if (a.type === "captcha") {
+          return `<div class="action">${head}
+            <div class="row"><label>图片选择器</label>
+              <input value="${esc(a.selector)}" placeholder="img.captcha" onchange="updPageAction(${i},'selector',this.value)">
+              <button onclick="openPicker(${i},'selector')">点选</button>
+            </div>
+            <div class="row"><label>输入框</label>
+              <input value="${esc(a.inputSelector)}" placeholder="input[name=code]" onchange="updPageAction(${i},'inputSelector',this.value)">
+              <button onclick="openPicker(${i},'inputSelector')">点选</button>
+            </div>
+            ${insertBar}
+          </div>`;
+        }
+        return '';
+      }).join('');
+    }
+    function updPageAction(i, k, v) { currentConfig.pages[currentPage].actions[i][k] = v; }
+    function removePageAction(i) { currentConfig.pages[currentPage].actions.splice(i, 1); renderPageConfig(); }
+    function movePageAction(i, dir) {
+      const arr = currentConfig.pages[currentPage].actions;
+      const j = i + dir;
+      if (j < 0 || j >= arr.length) return;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      renderPageConfig();
+    }
+    function insertPageActionBelow(i, t) {
+      const arr = currentConfig.pages[currentPage].actions;
+      let newOp;
+      if (t === "fill") newOp = { type: "fill", selector: "", value: "" };
+      else if (t === "click") newOp = { type: "click", selector: "" };
+      else if (t === "select") newOp = { type: "select", selector: "", value: "" };
+      else if (t === "captcha") newOp = { type: "captcha", selector: "", inputSelector: "" };
+      else return;
+      arr.splice(i + 1, 0, newOp);
+      renderPageConfig();
+    }
+    function addPageAction(t) {
+      const arr = currentConfig.pages[currentPage].actions;
+      let newOp;
+      if (t === "fill") newOp = { type: "fill", selector: "", value: "" };
+      else if (t === "click") newOp = { type: "click", selector: "" };
+      else if (t === "select") newOp = { type: "select", selector: "", value: "" };
+      else if (t === "captcha") newOp = { type: "captcha", selector: "", inputSelector: "" };
+      else return;
+      arr.push(newOp);
+      renderPageConfig();
+    }
+
+    // HTML 转选择器（精简版：粘贴自动解析，只显示最佳 + 一键使用）
+    function parseHtml() {
+      const input = $("htmlInput").value.trim();
+      if (!input) { $("htmlResult").style.display = "none"; return; }
+      const m = input.match(/<(\w+)((?:\s+[^>]*?)?)\s*\/?>/);
+      if (!m) {
+        $("htmlResult").style.display = "block";
+        $("htmlResult").innerHTML = '<div style="color:#c62828;font-size:12px">没识别到元素，再试一次</div>';
+        return;
+      }
+      const tag = m[1].toLowerCase();
+      const attrsStr = m[2] || "";
+      const attrs = {};
+      const re = /([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+      let am;
+      while ((am = re.exec(attrsStr)) !== null) attrs[am[1].toLowerCase()] = am[2] || am[3] || am[4] || "";
+
+      // 优先级：id > name > data-testid > placeholder > type > aria-label > class
+      let sel = null, why = "";
+      if (attrs.id) { sel = "#" + attrs.id; why = "id"; }
+      else if (attrs.name) { sel = tag + '[name="' + attrs.name + '"]'; why = "name"; }
+      else if (attrs["data-testid"]) { sel = tag + '[data-testid="' + attrs["data-testid"] + '"]'; why = "data-testid"; }
+      else if (attrs.placeholder) { sel = tag + '[placeholder*="' + attrs.placeholder + '"]'; why = "placeholder"; }
+      else if (attrs.type && tag === "input") { sel = 'input[type="' + attrs.type + '"]'; why = "type"; }
+      else if (attrs["aria-label"]) { sel = tag + '[aria-label="' + attrs["aria-label"] + '"]'; why = "aria-label"; }
+      else if (attrs.class) {
+        const cls = attrs.class.split(/\s+/).filter(c => c && !/^(form-control|form-control-lg|form-control-sm|form-select|input-|ng-|v-)/.test(c));
+        if (cls.length) { sel = tag + "." + cls[0]; why = "class"; }
+      }
+
+      if (!sel) {
+        $("htmlResult").style.display = "block";
+        $("htmlResult").innerHTML = '<div style="color:#c62828;font-size:12px">没找到 id/name/placeholder/class 等属性。换个元素再试</div>';
+        return;
+      }
+
+      $("htmlResult").style.display = "block";
+      $("htmlResult").innerHTML =
+        '<div class="row" style="margin:0"><label style="width:auto;color:#666">最佳</label>' +
+          '<input id="bestSel" value="' + esc(sel) + '" style="flex:1;font-family:monospace">' +
+          '<span style="color:#999;font-size:11px">(' + why + ')</span>' +
+          '<button class="primary" id="useSel">使用到本页</button>' +
+        '</div>';
+      $("useSel").onclick = () => {
+        const final = $("bestSel").value.trim();
+        if (!final) return;
+        const inputs = document.querySelectorAll("#pageConfig input[onchange*='selector'], #pageConfig input[onchange*='inputSelector']");
+        if (inputs.length === 0) { showMsg("error", "当前 tab 还没有操作（先在下面 + 一个）"); return; }
+        inputs.forEach(inp => {
+          const m2 = inp.getAttribute("onchange").match(/updPageAction\((\d+),'(\w+)'/);
+          if (m2) updPageAction(parseInt(m2[1], 10), m2[2], final);
+        });
+        renderPageConfig();
+        showMsg("success", `已填到 ${inputs.length} 个选择器（可手动改）`);
+      };
+    }
+    $("htmlInput").addEventListener("input", parseHtml);
+
+    // Tab 切换
+    document.querySelectorAll(".tab").forEach(t => {
+      t.onclick = () => {
+        document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+        t.classList.add("active");
+        currentPage = t.dataset.page;
+        // 如果老 config 没有这个页面 / 缺 actions / actions 不是数组——从 defaultConfig 补上
+        if (!currentConfig.pages[currentPage] || !Array.isArray(currentConfig.pages[currentPage].actions)) {
+          const def = defaultConfig().pages[currentPage];
+          if (def) { currentConfig.pages[currentPage] = JSON.parse(JSON.stringify(def)); }
+        }
+        renderPageConfig();
+      };
+    });
+
+    // 按钮事件
+    $("addAccount").onclick = () => { currentConfig.accounts.push({ id: uid(), username: "", password: "", enabled: true }); renderAccounts(); };
+    $("addCdk").onclick = () => {
+      const today = new Date().toISOString().slice(0, 10);
+      currentConfig.cdkList.push({ id: uid(), value: "", schedule: "daily", startDate: today });
+      renderCdk();
+    };
+
+    // 抽出来的保存函数：一键执行和"保存"按钮都调用它
+    function save() {
+      const dom = $("domainInput").value.trim();
+      if (!dom) { showMsg("error", "请先填写域名"); return false; }
+      currentConfig.domain = dom;
+      currentConfig.ocrEndpoint = $("ocrEndpoint").value.trim();
+      const all = loadAll();
+      all[dom] = currentConfig;
+      saveAll(all);
+      $("currentDomain").textContent = dom;
+      syncConfigToServer();
+      return true;
+    }
+
+    $("save").onclick = () => {
+      if (save()) showMsg("success", "已保存到本地 + 后端");
+    };
+
+    $("testOcr").onclick = async () => {
+      const endpoint = $("ocrEndpoint").value.trim();
+      if (!endpoint) { showMsg("error", "请先填写 ddddocr 端点"); return; }
+      const input = document.createElement("input");
+      input.type = "file"; input.accept = "image/*";
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          const b64 = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(String(r.result).split(",")[1]);
+            r.onerror = () => rej(new Error("读取文件失败"));
+            r.readAsDataURL(file);
+          });
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image_base64: b64 })
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const text = (await res.text()).trim();
+          showMsg("success", "识别成功：" + text);
+        } catch (err) {
+          const manual = prompt("OCR 识别失败：" + err.message + "\n\n请人工输入验证码：", "");
+          if (manual !== null) showMsg("success", "已采用人工输入：" + manual);
+          else showMsg("error", "已取消");
+        }
+      };
+      input.click();
+    };
+
+    $("export").onclick = async () => {
+      currentConfig.domain = $("domainInput").value.trim() || "unnamed";
+      currentConfig.ocrEndpoint = $("ocrEndpoint").value.trim();
+      const txt = JSON.stringify(currentConfig, null, 2);
+      // 复制到剪贴板
+      try { await navigator.clipboard.writeText(txt); showMsg("success", '✓ JSON 已复制到剪贴板，去目标站浮动面板"导入配置"粘贴'); }
+      catch (e) {
+        // 剪贴板失败则下载文件
+        const blob = new Blob([txt], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "autofill-" + currentConfig.domain + ".json";
+        a.click();
+        showMsg("info", "JSON 已下载，复制文件内容到目标站粘贴");
+      }
+    };
+
+    $("import").onclick = () => $("importFile").click();
+    $("importFile").onchange = (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const r = new FileReader();
+      r.onload = (ev) => {
+        try {
+          currentConfig = JSON.parse(ev.target.result);
+          $("domainInput").value = currentConfig.domain || "";
+          $("ocrEndpoint").value = currentConfig.ocrEndpoint || "";
+          $("currentDomain").textContent = currentConfig.domain || "未设置";
+          renderAccounts();
+          renderCdk();
+          renderPageConfig();
+          showMsg("success", "导入成功");
+        } catch (err) { showMsg("error", "导入失败：" + err.message); }
+      };
+      r.readAsText(f);
+    };
+
+    $("clear").onclick = () => {
+      if (!confirm("清空当前配置（账号/CDK/页面操作全部清空）？")) return;
+      currentConfig = defaultConfig();
+      $("domainInput").value = currentConfig.domain;
+      $("ocrEndpoint").value = currentConfig.ocrEndpoint;
+      $("currentDomain").textContent = currentConfig.domain;
+      renderAccounts();
+      renderCdk();
+      renderPageConfig();
+      syncConfigToServer();
+    };
+
+    // 点选器：后端开一个真实 Edge 窗口（非 headless），鼠标点元素就抓到 selector
+    let pickPollTimer = null;
+    async function openPicker(actionIdx, field) {
+      const dom = currentConfig.domain || '';
+      if (!dom) { showMsg("error", "请先在顶部填域名"); return; }
+      // 决定目标 URL：按当前 page 类型
+      const urls = {
+        login:   "https://" + dom + "/player/login",
+        cdk:     "https://" + dom + "/index/cdk",
+        claim:   "https://" + dom + "/player/index",
+      };
+      const target = urls[currentPage] || ("https://" + dom);
+      const pageName = currentPage || 'login';
+      showMsg("info", "正在打开点选窗口... 请稍等 1-2 秒");
+      // 关掉旧的点选轮询
+      if (pickPollTimer) { clearInterval(pickPollTimer); pickPollTimer = null; }
+      try {
+        const r = await fetch(SERVER + "/picker/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actionIdx, field, page: pageName, url: target }),
+        });
+        const data = await r.json();
+        if (!data.ok) { showMsg("error", "点选启动失败：" + (data.error || JSON.stringify(data))); return; }
+        showMsg("success", "✓ 点选窗口已开 → 鼠标移到元素上，点击即选中，ESC 退出");
+        // 串行递归轮询（避免 setInterval 并发导致多个 wait 抢同一个 result）
+        // 第一次延迟 1s：等后端 _open_picker 设 running=True，否则 wait 立即返回 running=False 误判"未选择"
+        pickPollTimer = setTimeout(function pollOnce() {
+          fetch(SERVER + "/picker/wait").then(r => r.json()).then(dd => {
+            if (dd.result && dd.result.selector) {
+              const { selector, field: f, actionIdx: ai } = dd.result;
+              if (ai == actionIdx && f == field) {
+                updPageAction(actionIdx, field, selector);
+                renderPageConfig();
+                showMsg("success", "✓ 已自动填入: " + selector);
+                pickPollTimer = null;
+                return;  // 结束，不递归
+              }
+            } else if (!dd.running) {
+              pickPollTimer = null;
+              showMsg("info", "点选窗口已关闭（未选择）");
+              return;  // 结束
+            }
+            // 还没结束，递归继续（保证串行：前一个 wait 完全返回才发下一个）
+            pickPollTimer = setTimeout(pollOnce, 200);
+          }).catch(e => {
+            // 网络抖动，递归继续
+            pickPollTimer = setTimeout(pollOnce, 500);
+          });
+        }, 1000);
+      } catch (e) {
+        showMsg("error", "点选请求失败：" + e.message);
+      }
+    }
+
+    // 保留旧版 localStorage 兜底（兼容老的）
+    function checkPicked() { /* 已废弃，保留空函数以防旧调用 */ }
+
+    // ---------- 一键执行（后端 headless 跑 + SSE 实时回传日志） ----------
+    // SERVER / DEFAULT_OCR 已在脚本顶部声明
+    let currentJobId = null;
+    let currentEs = null;
+
+    $("runAll").onclick = async () => {
+      save();
+      const cfg = currentConfig;
+      if (!cfg.domain) { showMsg("error", "请先在顶部填域名"); return; }
+      if (!cfg.accounts || cfg.accounts.length === 0) { showMsg("error", "请至少添加 1 个账号"); return; }
+      // 收集勾选：要执行哪些页面
+      const runTargets = [];
+      if ($("runLogin").checked) runTargets.push("login");
+      if ($("runClaim").checked) runTargets.push("claim");
+      if ($("runCdk").checked) runTargets.push("cdk");
+      // 校验：勾了领取页必须勾登录页（用户要求强制）
+      if ($("runClaim").checked && !$("runLogin").checked) {
+        showMsg("error", "勾了「登录后领取页」就必须勾「登录页」"); return;
+      }
+      if (runTargets.length === 0) { showMsg("error", "请至少勾选一个执行目标（登录页、领取页 或 CDK 页）"); return; }
+      cfg.runTargets = runTargets;
+      if (currentEs) { showMsg("error", "已有任务在跑，请先关闭"); return; }
+
+      // 显示进度面板
+      $("runPanel").style.display = "block";
+      $("runTitle").textContent = "🚀 执行中";
+      $("runHint").textContent = "正在提交任务给后端...";
+      $("runProgress").innerHTML = "";
+      // 初始化暂停按钮（不禁用——任何状态都可点，由 onclick 兜底判断 currentJobId）
+      $("pauseBtn").textContent = "⏸ 暂停";
+      $("pauseBtn").dataset.paused = "0";
+
+      try {
+        const resp = await fetch(SERVER + "/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ config: cfg })
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error);
+        currentJobId = data.job_id;
+        $("runHint").textContent = "已提交 job_id=" + currentJobId.slice(0, 8) + "，后端在后台跑，前端不弹窗不跳转";
+        appendLog("info", "▶ 任务已提交，后端开始执行...");
+        // 订阅 SSE
+        subscribeSSE(currentJobId);
+      } catch (err) {
+        $("runHint").innerHTML = '<span style="color:#c62828">提交失败: ' + escapeHtml(err.message) + '。请确认后端 ocr_server.py 已启动（监听 127.0.0.1:7777）</span>';
+        $("runTitle").textContent = "✗ 提交失败";
+        // 不禁用按钮——保持可点，onclick 会提示"没有正在运行的任务"
+      }
+    };
+
+    function subscribeSSE(jobId) {
+      if (currentEs) { try { currentEs.close(); } catch(e){} currentEs = null; }
+      const es = new EventSource(SERVER + "/stream?id=" + encodeURIComponent(jobId));
+      currentEs = es;
+
+      es.onmessage = (e) => {
+        let d;
+        try { d = JSON.parse(e.data); } catch { return; }
+        if (d.type === "log") {
+          appendLog(d.level || "info", d.msg);
+        } else if (d.type === "done") {
+          appendLog(d.ok ? "success" : "error", (d.ok ? "✅ " : "✗ ") + (d.msg || ""));
+          $("runTitle").textContent = d.ok ? "✅ 完成" : "✗ 失败";
+          $("runHint").textContent = d.msg || (d.ok ? "全部完成" : "执行失败");
+          // 任务结束——重置按钮状态（不置灰，按钮一直可点）
+          $("pauseBtn").textContent = "⏸ 暂停";
+          $("pauseBtn").dataset.paused = "0";
+          if (d.ok && d.updatedConfig && d.updatedConfig.cdkList) {
+            // 一次性 CDK used 状态写回前端
+            const upd = d.updatedConfig.cdkList;
+            for (let i = 0; i < currentConfig.cdkList.length && i < upd.length; i++) {
+              if (upd[i] && upd[i].used !== undefined) currentConfig.cdkList[i].used = upd[i].used;
+            }
+            save();
+            renderCdk();
+            showMsg("success", "已同步 CDK 状态");
+          }
+          es.close();
+          currentEs = null;
+        }
+      };
+      es.onerror = () => {
+        // 网络抖动：如果任务已 done 就忽略
+        if (!currentEs) return;
+        appendLog("warn", "⚠ SSE 连接异常，3 秒后重试...");
+        try { es.close(); } catch(e){}
+        currentEs = null;
+        setTimeout(() => {
+          if (currentJobId === jobId) subscribeSSE(jobId);
+        }, 3000);
+      };
+    }
+
+    function appendLog(level, msg) {
+      const colors = { info: "#333", success: "#2e7d32", error: "#c62828", warn: "#e65100" };
+      const html = `<div style="color:${colors[level] || '#333'};margin-bottom:2px">[${new Date().toLocaleTimeString()}] ${escapeHtml(msg)}</div>`;
+      $("runProgress").insertAdjacentHTML("beforeend", html);
+      $("runProgress").scrollTop = $("runProgress").scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    $("closeRun").onclick = () => {
+      if (currentEs) { try { currentEs.close(); } catch(e){} currentEs = null; }
+      $("runPanel").style.display = "none";
+    };
+
+    // 暂停 / 继续：挂到 window，供 inline onclick 调用
+    window.togglePause = async () => {
+      console.log("[togglePause] clicked, currentJobId=", currentJobId);
+      if (!currentJobId) { showMsg("error", "没有正在运行的任务"); return; }
+      const btn = $("pauseBtn");
+      const isPaused = btn.dataset.paused === "1";
+      const path = isPaused ? "/resume" : "/pause";
+      try {
+        const resp = await fetch(SERVER + "/jobs/" + currentJobId + path, { method: "POST" });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "HTTP " + resp.status);
+        if (isPaused) {
+          btn.textContent = "⏸ 暂停";
+          btn.dataset.paused = "0";
+        } else {
+          btn.textContent = "▶ 继续";
+          btn.dataset.paused = "1";
+        }
+        appendLog("info", data.msg || (isPaused ? "▶ 已继续" : "⏸ 已暂停"));
+      } catch (err) {
+        showMsg("error", "操作失败: " + err.message);
+      }
+    };
+
+    // 取消任务：先 confirm
+    window.cancelTask = async () => {
+      console.log("[cancelTask] clicked, currentJobId=", currentJobId);
+      if (!currentJobId) { showMsg("error", "没有正在运行的任务"); return; }
+      if (!confirm("确定要取消当前任务吗？\n\n会立刻停止当前账号，跳过后续账号和 CDK。")) return;
+      try {
+        const resp = await fetch(SERVER + "/jobs/" + currentJobId + "/cancel", { method: "POST" });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "HTTP " + resp.status);
+        appendLog("warn", "⏹ 已请求取消");
+      } catch (err) {
+        showMsg("error", "取消失败: " + err.message);
+      }
+    };
+
+    // 初始化
+    (async function init() {
+      // 1. 优先从后端拉
+      const fromServer = await loadConfigFromServer();
+      // 2. 后端没数据就用 localStorage
+      if (!fromServer) {
+        const all = loadAll();
+        const doms = Object.keys(all);
+        if (doms.length) {
+          const target = doms.find(d => d === "newxiadan.3f8cz.com") || doms[0];
+          currentConfig = all[target];
+          if (!currentConfig.pages) currentConfig.pages = defaultConfig().pages;
+          if (!currentConfig.accounts) currentConfig.accounts = [];
+          if (!currentConfig.cdkList) currentConfig.cdkList = [];
+        }
+      }
+      $("domainInput").value = currentConfig.domain || "";
+      $("ocrEndpoint").value = currentConfig.ocrEndpoint || DEFAULT_OCR;
+      $("currentDomain").textContent = currentConfig.domain || "未设置";
+      renderAccounts();
+      renderCdk();
+      renderPageConfig();
+
+      // 3. 拉后端信息生成二维码（PC 端才有意义）
+      try {
+        const r = await fetch(SERVER + "/api/info");
+        if (r.ok) {
+          const info = await r.json();
+          if (info.lan_ip && info.lan_ip !== "127.0.0.1") {
+            const url = "http://" + info.lan_ip + (window.location.port ? ":" + window.location.port : "") + "/";
+            $("qrUrl").textContent = url;
+            $("qrImg").src = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url);
+            $("qrCard").style.display = "flex";
+          }
+        }
+      } catch (e) { /* 离线时隐藏 */ }
+    })();
+  </script>
+</body>
+</html>
