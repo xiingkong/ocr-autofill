@@ -21,6 +21,7 @@ import uuid
 import threading
 import queue
 import socket
+import sqlite3
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -34,6 +35,95 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     MEIPASS = APP_DIR
 CONFIG_FILE = os.path.join(APP_DIR, "autofill_config.json")
+DB_FILE = os.path.join(APP_DIR, "autofill.db")
+
+# ---------- SQLite 数据库 ----------
+def _init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        game_account TEXT UNIQUE NOT NULL,
+        game_password TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS cdks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL,
+        used INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )""")
+    conn.commit()
+    conn.close()
+
+def db_get_accounts():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT game_account, game_password FROM accounts ORDER BY id")
+    rows = c.fetchall()
+    conn.close()
+    return [{"username": r[0], "password": r[1]} for r in rows]
+
+def db_upsert_account(game_account, game_password):
+    """按 game_account 去重：存在+密码不同→更新，存在+相同→跳过，不存在→新增"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT game_password FROM accounts WHERE game_account = ?", (game_account,))
+    row = c.fetchone()
+    if row:
+        if row[0] == game_password:
+            conn.close()
+            return "skip"
+        c.execute("UPDATE accounts SET game_password = ? WHERE game_account = ?", (game_password, game_account))
+        conn.commit()
+        conn.close()
+        return "update"
+    c.execute("INSERT INTO accounts (game_account, game_password) VALUES (?, ?)", (game_account, game_password))
+    conn.commit()
+    conn.close()
+    return "insert"
+
+def db_delete_account(aid):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM accounts WHERE id = ?", (aid,))
+    conn.commit()
+    conn.close()
+
+def db_get_cdks():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, code, used FROM cdks ORDER BY id")
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "code": r[1], "used": bool(r[2])} for r in rows]
+
+def db_add_cdk(code):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO cdks (code) VALUES (?)", (code,))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def db_delete_cdk(cid):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM cdks WHERE id = ?", (cid,))
+    conn.commit()
+    conn.close()
+
+def db_mark_cdk_used(code):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE cdks SET used = 1 WHERE code = ?", (code,))
+    conn.commit()
+    conn.close()
+
 # 容器化部署（如 Sealos/Docker）支持：启动时从环境变量读 config 写回本地文件
 # 用法：docker run -e AUTOFILL_CONFIG_JSON='{"accounts":[...]}' ...
 def _load_config_from_env():
@@ -1387,8 +1477,11 @@ def _scheduler_loop():
                         "cancel_requested": False,
                         "trigger": "schedule",
                     }
-                    cfg_to_run = json.loads(json.dumps(LAST_CONFIG))  # 深拷贝
+                    cfg_to_run = json.loads(json.dumps(LAST_CONFIG)) if LAST_CONFIG else {}
                     cfg_to_run.pop("schedule", None)  # 调度信息不传给执行逻辑
+                    # 定时任务从数据库读所有账号 + 全局 CDK（不依赖前端 config）
+                    cfg_to_run["accounts"] = db_get_accounts()
+                    cfg_to_run["cdkList"] = [{"code": c["code"], "schedule": "daily", "used": c["used"]} for c in db_get_cdks()]
                     # 单独启动线程跑这个 job
                     def _sched_th():
                         try:
@@ -1695,7 +1788,52 @@ class Handler(BaseHTTPRequestHandler):
                     "playwright": playwright is not None,
                 })
             elif self.path == '/api/config':
-                self._json(200, load_persisted_config())
+                if self.command == 'POST':
+                    # 前端 syncConfigToServer：保存 config 到文件 + LAST_CONFIG
+                    try:
+                        body = self._read_body()
+                        cfg = body if isinstance(body, dict) else {}
+                        ok = save_persisted_config(cfg)
+                        global LAST_CONFIG
+                        LAST_CONFIG = cfg
+                        self._json(200, {"ok": ok})
+                    except Exception as e:
+                        self._json(500, {"error": str(e)})
+                else:
+                    self._json(200, load_persisted_config())
+            elif self.path == '/api/accounts':
+                if self.command == 'POST':
+                    body = self._read_body()
+                    ga = (body.get("username") or body.get("game_account") or "").strip()
+                    gp = (body.get("password") or body.get("game_password") or "").strip()
+                    if not ga or not gp:
+                        return self._json(400, {"error": "账号密码不能为空"})
+                    action = db_upsert_account(ga, gp)
+                    self._json(200, {"ok": True, "action": action})
+                elif self.command == 'DELETE':
+                    body = self._read_body()
+                    aid = body.get("id")
+                    if aid:
+                        db_delete_account(aid)
+                    self._json(200, {"ok": True})
+                else:
+                    self._json(200, db_get_accounts())
+            elif self.path == '/api/cdks':
+                if self.command == 'POST':
+                    body = self._read_body()
+                    code = (body.get("code") or "").strip()
+                    if not code:
+                        return self._json(400, {"error": "CDK 不能为空"})
+                    ok = db_add_cdk(code)
+                    self._json(200, {"ok": ok})
+                elif self.command == 'DELETE':
+                    body = self._read_body()
+                    cid = body.get("id")
+                    if cid:
+                        db_delete_cdk(cid)
+                    self._json(200, {"ok": True})
+                else:
+                    self._json(200, db_get_cdks())
             elif self.path.startswith('/health'):
                 self._json(200, {"ok": True, "ocr": ocr is not None, "playwright": playwright is not None})
             elif self.path.startswith('/progress'):
@@ -1981,6 +2119,9 @@ def main():
     print(f"实时日志:   GET  http://127.0.0.1:{SERVER_PORT}/stream?id=<job_id>  (SSE)")
     print("按 Ctrl+C 停止")
     print("=" * 50)
+    # 初始化数据库
+    _init_db()
+    print(f"数据库:     {DB_FILE}")
     # 启动后自动开浏览器（通过 /restart 重启时跳过，避免弹新窗口）
     def _open_browser():
         if os.environ.get("OCR_NO_BROWSER") == "1":
