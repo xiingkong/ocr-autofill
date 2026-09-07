@@ -155,25 +155,31 @@ K 页</label>
     </div>
   </div>
 
-  <!-- CDK 列表 -->
+  <!-- 测试兑换（临时账密，跑完入库） -->
   <div class="card">
-    <h2>CDK 列表</h2>
-    <p style="font-size:12px;color:#666;margin:0 0 8px">
-      调度：<span class="badge daily">每日</span> 每天激活
-      <span class="badge weekly">每7日</span> 距起始日 0/7/14... 天激活
-      <span class="badge monthly">每30日</span> 距起始日 0/30/60... 天激活
-      <span class="badge once">一次性</span> 用一次后失效
-    </p>
-    <table id="cdkTable">
-      <thead>
-        <tr><th>CDK</th><th>调度</th><th>状态</th><th>今日</th><th>操作</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <div style="margin-top:8px">
-      <button class="primary" id="addCdk">+ 添加 CDK</button>
+    <h2>测试兑换 <span style="font-weight:normal;color:#999;font-size:12px">（临时账密，用后端 CDK 池跑一次，跑完自动入库）</span></h2>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="testUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
+      <input id="testPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
+      <button class="primary" id="testRedeemBtn">▶ 测试兑换</button>
+      <span id="testRedeemStatus" style="font-size:12px;color:#666"></span>
     </div>
-    <div id="todayActive" class="msg info" style="margin-top:8px"></div>
+  </div>
+
+  <!-- CDK 管理（后端） -->
+  <div class="card">
+    <h2>CDK 池（后端管理）</h2>
+    <p style="font-size:12px;color:#666;margin:0">
+      CDK 由后端管理，不在面板添加。
+      <br>终端命令：
+      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-daily &lt;code1&gt; [code2 ...]</code>
+      <br>一次性 CDK（跑完一轮自动删）：
+      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-once &lt;code&gt;</code>
+      <br>查看/删除/重置：
+      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk list</code> ·
+      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk remove &lt;code&gt;</code> ·
+      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk reset &lt;code&gt;</code>
+    </p>
   </div>
 
   <!-- 页面配置 -->
@@ -638,24 +644,53 @@ K 页</label>
         showMsg("error", "网络错误：" + e.message);
       }
     };
-    $("addCdk").onclick = async () => {
-      const code = prompt("请输入 CDK 码：");
-      if (!code) return;
+    // CDK 已改为后端管理（CLI），面板不再处理 addCdk
+
+    // 测试兑换
+    $("testRedeemBtn").onclick = async () => {
+      const u = $("testUser").value.trim();
+      const p = $("testPass").value;
+      if (!u || !p) { showMsg("error", "请填写账密"); return; }
+      $("testRedeemBtn").disabled = true;
+      $("testRedeemStatus").textContent = "提交中…";
       try {
-        const r = await fetch(SERVER + "/api/cdks", {
+        const r = await fetch(SERVER + "/api/test-redeem", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: code.trim() })
+          body: JSON.stringify({ username: u, password: p })
         });
         const d = await r.json();
-        if (d.ok) {
-          showMsg("success", "CDK 已添加");
-          loadCdksFromServer();
-        } else {
-          showMsg("error", "CDK 已存在或添加失败");
+        if (d.error) {
+          $("testRedeemStatus").textContent = "✗ " + d.error;
+          showMsg("error", d.error);
+          $("testRedeemBtn").disabled = false;
+          return;
         }
+        $("testRedeemStatus").textContent = `跑中（用 ${d.cdk_count} 个 CDK）… job=${d.job_id.slice(0,8)}`;
+        // 轮询状态
+        const poll = setInterval(async () => {
+          try {
+            const sr = await fetch(SERVER + "/api/jobs?job_id=" + d.job_id);
+            const sd = await sr.json();
+            if (sd.status === "done" || sd.status === "error" || sd.status === "cancelled") {
+              clearInterval(poll);
+              $("testRedeemBtn").disabled = false;
+              if (sd.saved === false) {
+                $("testRedeemStatus").innerHTML = '<span style="color:#c62828">✗ ' + (sd.save_reason || "账密错") + '</span>';
+                showMsg("error", "账密错，未入库");
+              } else if (sd.saved === true) {
+                $("testRedeemStatus").innerHTML = '<span style="color:#2e7d32">✓ ' + (sd.save_reason || "已入库") + '</span>';
+                showMsg("success", "已入库账号：" + u);
+                loadAccountsFromServer();
+              } else {
+                $("testRedeemStatus").textContent = "状态：" + sd.status;
+              }
+            }
+          } catch (e) { /* 网络抖动，继续轮询 */ }
+        }, 2000);
       } catch (e) {
-        showMsg("error", "网络错误：" + e.message);
+        $("testRedeemStatus").textContent = "✗ " + e.message;
+        $("testRedeemBtn").disabled = false;
       }
     };
 

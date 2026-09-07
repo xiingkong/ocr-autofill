@@ -51,8 +51,14 @@ def _init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code TEXT UNIQUE NOT NULL,
         used INTEGER DEFAULT 0,
+        once INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )""")
+    # 兼容旧库：补 once 字段
+    try:
+        c.execute("ALTER TABLE cdks ADD COLUMN once INTEGER DEFAULT 0")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -93,16 +99,16 @@ def db_delete_account(aid):
 def db_get_cdks():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, code, used FROM cdks ORDER BY id")
+    c.execute("SELECT id, code, used, once FROM cdks ORDER BY id")
     rows = c.fetchall()
     conn.close()
-    return [{"id": r[0], "code": r[1], "used": bool(r[2])} for r in rows]
+    return [{"id": r[0], "code": r[1], "used": bool(r[2]), "once": bool(r[3])} for r in rows]
 
-def db_add_cdk(code):
+def db_add_cdk(code, once=0):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO cdks (code) VALUES (?)", (code,))
+        c.execute("INSERT INTO cdks (code, once) VALUES (?, ?)", (code, once))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -116,6 +122,36 @@ def db_delete_cdk(cid):
     c.execute("DELETE FROM cdks WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
+
+def db_delete_cdk_by_code(code):
+    """按 code 删（CLI 用）"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM cdks WHERE code = ?", (code,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+def db_delete_once_cdks():
+    """删所有一次性 CDK（跑完一轮后调）"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM cdks WHERE once = 1")
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
+
+def db_reset_cdk(code):
+    """重置某 CDK 为未用（每日 CDK 想重跑时）"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE cdks SET used = 0 WHERE code = ?", (code,))
+    updated = c.rowcount
+    conn.commit()
+    conn.close()
+    return updated
 
 def db_mark_cdk_used(code):
     conn = sqlite3.connect(DB_FILE)
@@ -195,6 +231,9 @@ CAPTCHA_MIN_LEN = 4
 CAPTCHA_MAX_LEN = 5
 # 错误关键词：只重试"验证码错误"这类，不要被"已使用/上限"业务错误触发
 CAPTCHA_RETRY_KEYWORDS = ["验证码错误", "验证码不正确", "请重新输入验证码", "wrong captcha", "captcha error", "invalid captcha"]
+# 账密错误关键词：出现即判定账密错，不入库，不进下一轮
+# 注意：不含"登录失败"（登录失败可能是验证码/网络等其他原因）
+WRONG_PWD_KEYWORDS = ["账号或密码错误", "密码错误", "密码不正确", "账号不存在", "账号未注册", "用户不存在", "请检查账号和密码"]
 # 重试控制：错了刷图重 OCR，最多 3 次
 MAX_CAPTCHA_RETRY = 3
 # 验证码上下文：OCR 时设置，click 时检查并清空
@@ -203,7 +242,7 @@ captcha_ctx = {
     "image_sel": "",        # 验证码图片选择器
     "input_sel": "",        # 验证码输入框选择器
     "attempts": 0,          # 已重试次数
-    "last_result": None,    # "success" / "failure" / None —— 给外层轮次循环判断用
+    "last_result": None,    # "success" / "failure" / "wrong_pwd" / None —— 给外层轮次循环判断用
 }
 
 def preprocess_captcha_image(img_bytes):
@@ -245,6 +284,14 @@ def is_captcha_error_text(page_text):
         if kw.lower() in text_lower:
             return True
     return False
+
+def is_wrong_pwd_text(page_text):
+    """判断页面文字是否含"账号密码错误"（账密错）。
+    命中：直接判定账密错，不入库，不进下一轮重试。"""
+    for kw in WRONG_PWD_KEYWORDS:
+        if kw in page_text:
+            return kw
+    return None
 
 def refresh_captcha_image(page, image_sel, emit):
     """点击验证码图本身换新图（D. 智能延时：换图后等 800ms）
@@ -450,7 +497,7 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
 def retry_captcha_after_click(page, submit_selector, emit):
     """A. 重试机制：点完 submit 之后，如果检测到验证码错误，就刷图 + 重 OCR + 重填 + 重 submit
     最多 MAX_CAPTCHA_RETRY 次
-    在 captcha_ctx["last_result"] 写 "success" / "failure"，给外层轮次循环用"""
+    在 captcha_ctx["last_result"] 写 "success" / "failure" / "wrong_pwd"，给外层轮次循环用"""
     if not captcha_ctx["active"]:
         return
     # 等弹窗出现
@@ -460,6 +507,13 @@ def retry_captcha_after_click(page, submit_selector, emit):
         page_text = page.evaluate("() => document.body.innerText || ''") or ""
     except Exception:
         page_text = ""
+    # 优先级 0：账密错误（出现就判定，不再试验证码）—— 用户要求：账密错不入库，不进下一轮
+    wrong_pwd_kw = is_wrong_pwd_text(page_text)
+    if wrong_pwd_kw:
+        emit(f"  ✗ 检测到账密错误（关键词「{wrong_pwd_kw}」），停止重试，不入库、不进下一轮", "error")
+        captcha_ctx["active"] = False
+        captcha_ctx["last_result"] = "wrong_pwd"
+        return
     # 优先级 1：含成功关键词（"上限"/"领取成功"/"失败:0"）→ 已成功，不再试错
     # 单独解析"失败: N 个"——N=0 视为成功；N>=1 视为业务失败（验证码已通过，不进下一轮）
     for m in _FAIL_COUNT_RE.finditer(page_text):
@@ -1480,8 +1534,15 @@ def _scheduler_loop():
                     cfg_to_run = json.loads(json.dumps(LAST_CONFIG)) if LAST_CONFIG else {}
                     cfg_to_run.pop("schedule", None)  # 调度信息不传给执行逻辑
                     # 定时任务从数据库读所有账号 + 全局 CDK（不依赖前端 config）
+                    # 区分 once / daily：每日 CDK 只能 used=0 的才跑；一次性 CDK 不论 used 都跑
                     cfg_to_run["accounts"] = db_get_accounts()
-                    cfg_to_run["cdkList"] = [{"code": c["code"], "schedule": "daily", "used": c["used"]} for c in db_get_cdks()]
+                    cfg_to_run["cdkList"] = []
+                    for c in db_get_cdks():
+                        if c["once"]:
+                            cfg_to_run["cdkList"].append({"code": c["code"], "schedule": "once", "used": False, "_db_id": c["id"]})
+                        else:
+                            if not c["used"]:
+                                cfg_to_run["cdkList"].append({"code": c["code"], "schedule": "daily", "used": False, "_db_id": c["id"]})
                     # 单独启动线程跑这个 job
                     def _sched_th():
                         try:
@@ -1678,9 +1739,16 @@ def _run_job_impl(job_id, config, emit):
                                     # 跟 login 一致：异常也算失败，加入下一轮重试
                                     captcha_ctx["last_result"] = "failure"
                                 done += 1
-                        # 账号处理完一轮：检查验证码是否成功，失败则加入下一轮重试
-                        # 业务失败（"失败: 1 个"等）不算验证码失败——只有 retry_captcha_after_click 标 failure 才算
-                        if captcha_ctx.get("last_result") == "failure":
+                        # 账号处理完一轮：检查结果分类
+                        # - "wrong_pwd" → 账密错，不入库，不进下一轮
+                        # - "failure"    → 验证码失败，进下一轮重试
+                        # - "success"    → 完成（成功或业务失败），不入 next_remaining
+                        last = captcha_ctx.get("last_result")
+                        if last == "wrong_pwd":
+                            acc_user = acc.get("username", "?")
+                            emit(f"  ✗ 账号 {acc_user} 账密错误，标记但不进下一轮、不入库", "error")
+                            # 账密错：不入 next_remaining，账密也不入库（用户要求）
+                        elif last == "failure":
                             acc_user = acc.get("username", "?")
                             emit(f"  ⚠ 账号 {acc_user} 验证码失败，加入下一轮重试", "warn")
                             next_remaining.append(acc)
@@ -1723,10 +1791,21 @@ def _run_job_impl(job_id, config, emit):
             job["status"] = "done"
             job["result"] = "completed"
     emit("\n✅ 全部完成")
-    # 持久化一次性 CDK 的 used 状态到本地文件（关掉服务也不丢）
+    # 持久化 CDK 状态到数据库
+    # - 一次性 CDK：跑完一轮全删（不管成功失败）
+    # - 每日 CDK：标 used=1（明天不再跑）
+    # - 不论成功失败都标 used=1（避免每天重复跑同一个 CDK）
     try:
-        persist_used_flags(config)
-        emit("  ✓ 一次性 CDK 状态已保存到本地")
+        n = db_delete_once_cdks()
+        if n:
+            emit(f"  ✓ 已删除 {n} 个一次性 CDK")
+        n_marked = 0
+        for cdk in cdk_list:
+            if cdk.get("schedule") != "once":
+                if db_mark_cdk_used(cdk.get("code", "")):
+                    n_marked += 1
+        if n_marked:
+            emit(f"  ✓ {n_marked} 个每日 CDK 已标已用（明天不会重跑）")
     except Exception as e:
         emit(f"  ⚠ 保存 CDK 状态失败: {e}", "warn")
     # 把更新后的 cdkList 写回（给面板同步）
@@ -1851,6 +1930,22 @@ class Handler(BaseHTTPRequestHandler):
                             "updatedConfig": job.get("updatedConfig"),
                         })
                         job["last_index"] = len(job["log"])
+            elif self.path.startswith('/api/jobs'):
+                # /api/jobs?job_id=xxx —— 简化版进度查询（前端测试兑换用）
+                qs = parse_qs(urlparse(self.path).query)
+                jid = qs.get('job_id', [''])[0]
+                job = JOBS.get(jid)
+                if not job:
+                    self._json(404, {"error": "job not found"})
+                else:
+                    with JOBS_LOCK:
+                        self._json(200, {
+                            "status": job["status"],
+                            "saved": job.get("saved"),
+                            "save_reason": job.get("save_reason"),
+                            "save_action": job.get("save_action"),
+                            "log_count": len(job.get("log", [])),
+                        })
             elif self.path.startswith('/stream'):
                 # SSE：实时推送日志
                 qs = parse_qs(urlparse(self.path).query)
@@ -2009,7 +2104,7 @@ class Handler(BaseHTTPRequestHandler):
                 img = base64.b64decode(img_b64)
                 result = ocr.classification(img)
                 self._json(200, {"result": result})
-            elif self.path.startswith('/run'):
+            elif self.path == '/api/run':
                 body = self._read_body()
                 cfg = body.get("config", {})
                 jid = uuid.uuid4().hex
@@ -2018,6 +2113,77 @@ class Handler(BaseHTTPRequestHandler):
                 LAST_CONFIG = cfg
                 run_job(jid, cfg)
                 self._json(200, {"job_id": jid})
+            elif self.path == '/api/test-redeem':
+                # 测试兑换：用前端临时输入的账密 + 用后端 CDK 池跑一次
+                # 账密错 → 不入库；成功/其他 → 入库
+                body = self._read_body()
+                username = (body.get("username") or "").strip()
+                password = (body.get("password") or "").strip()
+                if not username or not password:
+                    return self._json(400, {"error": "账号密码不能为空"})
+                # 用 G2 策略：所有每日 CDK 各跑一次
+                active_cdks = []
+                for c in db_get_cdks():
+                    if c["once"]:
+                        active_cdks.append({"code": c["code"], "schedule": "once", "used": False})
+                    else:
+                        if not c["used"]:
+                            active_cdks.append({"code": c["code"], "schedule": "daily", "used": False})
+                if not active_cdks:
+                    return self._json(400, {"error": "后端 CDK 池为空，请先用 cdk add-daily 加"})
+                # 组装 config（只跑 cdk target，但实际 _run_job_impl 会跑 login+cdk）
+                cfg = {
+                    "domain": LAST_CONFIG.get("domain", "newxiadan.3f8cz.com") if LAST_CONFIG else "newxiadan.3f8cz.com",
+                    "pages": (LAST_CONFIG.get("pages") if LAST_CONFIG else None) or json.load(open(CONFIG_FILE, encoding="utf-8")).get("pages", {}) if os.path.exists(CONFIG_FILE) else {},
+                    "accounts": [{"username": username, "password": password}],
+                    "cdkList": active_cdks,
+                    "runTargets": ["login", "cdk"],
+                }
+                jid = uuid.uuid4().hex
+                JOBS[jid] = {
+                    "status": "running", "log": [], "result": None, "started": time.time(),
+                    "cond": threading.Condition(), "last_index": 0, "subscribers": 0,
+                    "updatedConfig": None, "paused": False, "cancel_requested": False,
+                    "trigger": "test-redeem", "test_account": {"username": username, "password": password},
+                }
+                def _test_th():
+                    try:
+                        def _emit(msg, level="info"):
+                            with JOBS_LOCK:
+                                job = JOBS.get(jid)
+                                if not job: return
+                                job["log"].append({"time": time.time(), "msg": msg, "level": level})
+                            print(f"[{jid[:8]}] {msg}", flush=True)
+                            with job["cond"]:
+                                job["cond"].notify_all()
+                        _run_job_impl(jid, cfg, _emit)
+                        # 跑完后判断结果：查日志有没有"账密错误"关键词
+                        with JOBS_LOCK:
+                            job = JOBS.get(jid)
+                            log = job.get("log", []) if job else []
+                        wrong_pwd = any("账密错误" in item.get("msg", "") for item in log)
+                        if wrong_pwd:
+                            # 账密错：不入库
+                            with JOBS_LOCK:
+                                if job: job["saved"] = False; job["save_reason"] = "账密错"
+                        else:
+                            # 没账密错：入库
+                            action = db_upsert_account(username, password)
+                            with JOBS_LOCK:
+                                if job:
+                                    job["saved"] = True
+                                    job["save_action"] = action
+                                    job["save_reason"] = f"成功入库（{action}）"
+                            print(f"[test-redeem] 账密入库: {action}", flush=True)
+                    except Exception as e:
+                        import traceback
+                        print(f"[test-redeem] 异常: {e}", flush=True)
+                        print(traceback.format_exc(), flush=True)
+                        with JOBS_LOCK:
+                            job = JOBS.get(jid)
+                            if job: job["status"] = "error"
+                threading.Thread(target=_test_th, daemon=True).start()
+                self._json(200, {"job_id": jid, "cdk_count": len(active_cdks)})
             elif self.path.startswith('/picker/start'):
                 qs = parse_qs(urlparse(self.path).query)
                 body = self._read_body()
@@ -2175,5 +2341,99 @@ def main():
         server.shutdown()
 
 
+# ---------- CDK CLI ----------
+def cdk_cli_help():
+    print("""CDK 管理命令（终端运行，不用启 HTTP 服务）:
+
+  python ocr_server.py cdk add-daily <code1> [code2 ...]   添加每日 CDK
+  python ocr_server.py cdk add-once <code1> [code2 ...]   添加一次性 CDK（跑完一轮自动删）
+  python ocr_server.py cdk remove <code>                  删除指定 CDK
+  python ocr_server.py cdk reset <code>                   重置每日 CDK 为未用（明天能再跑）
+  python ocr_server.py cdk list                           列出所有 CDK
+  python ocr_server.py cdk help                           显示本帮助
+
+数据库位置：{DB_FILE}
+""".replace("{DB_FILE}", DB_FILE))
+
+def cdk_cli(args):
+    """CDK 子命令入口。返回 0=成功，非0=失败"""
+    if len(args) < 1 or args[0] in ("help", "-h", "--help"):
+        cdk_cli_help()
+        return 0
+    cmd = args[0]
+    rest = args[1:]
+    if cmd == "add-daily":
+        if not rest:
+            print("✗ 至少给一个 CDK code", file=sys.stderr)
+            return 1
+        ok = 0; skip = 0
+        for code in rest:
+            if db_add_cdk(code, once=0):
+                print(f"  ✓ [每日] {code}")
+                ok += 1
+            else:
+                print(f"  - [已存在] {code}")
+                skip += 1
+        print(f"\n共 {ok} 个新增，{skip} 个已存在")
+        return 0
+    if cmd == "add-once":
+        if not rest:
+            print("✗ 至少给一个 CDK code", file=sys.stderr)
+            return 1
+        ok = 0; skip = 0
+        for code in rest:
+            if db_add_cdk(code, once=1):
+                print(f"  ✓ [一次性] {code}")
+                ok += 1
+            else:
+                print(f"  - [已存在] {code}")
+                skip += 1
+        print(f"\n共 {ok} 个新增，{skip} 个已存在")
+        return 0
+    if cmd == "remove":
+        if not rest:
+            print("✗ 至少给一个 CDK code", file=sys.stderr)
+            return 1
+        for code in rest:
+            n = db_delete_cdk_by_code(code)
+            if n:
+                print(f"  ✓ 已删 {code}")
+            else:
+                print(f"  - {code} 不存在")
+        return 0
+    if cmd == "reset":
+        if not rest:
+            print("✗ 至少给一个 CDK code", file=sys.stderr)
+            return 1
+        for code in rest:
+            n = db_reset_cdk(code)
+            if n:
+                print(f"  ✓ 已重置 {code} 为未用")
+            else:
+                print(f"  - {code} 不存在")
+        return 0
+    if cmd == "list":
+        cdks = db_get_cdks()
+        if not cdks:
+            print("（数据库为空）")
+            return 0
+        # 表格
+        print(f"{'ID':<5} {'类型':<8} {'状态':<8} {'CDK'}")
+        print("-" * 60)
+        for c in cdks:
+            ctype = "一次性" if c["once"] else "每日"
+            status = "已用" if c["used"] else "可用"
+            print(f"{c['id']:<5} {ctype:<8} {status:<8} {c['code']}")
+        print(f"\n共 {len(cdks)} 个 CDK")
+        return 0
+    print(f"✗ 未知子命令: {cmd}", file=sys.stderr)
+    cdk_cli_help()
+    return 1
+
+
 if __name__ == '__main__':
+    # CLI 模式：python ocr_server.py cdk ...
+    if len(sys.argv) >= 2 and sys.argv[1] == "cdk":
+        _init_db()  # CLI 也要先建表
+        sys.exit(cdk_cli(sys.argv[2:]))
     main()
