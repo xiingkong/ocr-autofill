@@ -1010,7 +1010,7 @@ def _open_picker(url, action_idx, field):
         last_err = None
         for attempt in range(2):
             try:
-                page.goto(url, timeout=20000, wait_until="load")
+                page.goto(url, timeout=30000, wait_until="commit")
                 last_err = None
                 break
             except Exception as e:
@@ -1736,7 +1736,7 @@ def _run_job_impl(job_id, config, emit):
                                     target = page_obj.get("urlPattern", "https://" + domain + "/player/login")
                                     if not target.startswith("http"):
                                         target = "https://" + domain + target
-                                    page.goto(target, timeout=20000)
+                                    page.goto(target, timeout=30000, wait_until="commit")
                                     emit(f"  打开: {target}")
                                     for op in page_obj.get("actions", []):
                                         _check_pause(job_id, emit)
@@ -1766,7 +1766,7 @@ def _run_job_impl(job_id, config, emit):
                                             if target:
                                                 if not target.startswith("http"):
                                                     target = "https://" + domain + target
-                                                page.goto(target, timeout=20000)
+                                                page.goto(target, timeout=30000, wait_until="commit")
                                                 emit(f"  打开: {target}")
                                             else:
                                                 emit("  (claim 设了 autoGoto 但没配 urlPattern，跳过 goto)", "warn")
@@ -1793,7 +1793,7 @@ def _run_job_impl(job_id, config, emit):
                                     target = page_obj.get("urlPattern", "https://" + domain + "/index/cdk")
                                     if not target.startswith("http"):
                                         target = "https://" + domain + target
-                                    page.goto(target, timeout=20000)
+                                    page.goto(target, timeout=30000, wait_until="commit")
                                     emit(f"  打开: {target}")
                                     for op in page_obj.get("actions", []):
                                         _check_pause(job_id, emit)
