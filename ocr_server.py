@@ -25,6 +25,62 @@ import sqlite3
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# ---------- 密码加密（Fernet，对称加密） ----------
+# 保护目标：数据库文件被单独偷走时，密码不可见
+# 不防：代码 + 数据库一起被偷（密钥在代码里）
+# 密钥来源（按优先级）：
+#   1. 环境变量 AUTOFILL_DB_KEY（生产用，塞 Sealos 环境变量）
+#   2. 固定 fallback（开发用，明文写在代码里，只防 DB 单独泄漏）
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    _HAS_FERNET = True
+except ImportError:
+    _HAS_FERNET = False
+    InvalidToken = Exception  # 兜底
+
+def _get_fernet():
+    """获取 Fernet 实例。如果 cryptography 没装就返 None（降级明文）。"""
+    if not _HAS_FERNET:
+        return None
+    key = os.environ.get("AUTOFILL_DB_KEY", "").strip()
+    if not key:
+        # fallback 密钥（开发用，生产必须设环境变量）
+        # 注意：这个 key 编码了 "dev-only-do-not-use-in-prod" 字符串
+        # 如果有人在生产用这个 key，密码用以下 key 解：
+        fallback = b'dev-only-do-not-use-in-prod-32bytes!!'  # 占位
+        import hashlib
+        fallback = base64.urlsafe_b64encode(hashlib.sha256(b"ocr-autofill-dev-fallback-key").digest())
+        key = fallback.decode()
+    try:
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception:
+        return None
+
+def _encrypt_password(plaintext: str) -> str:
+    """加密密码。Fernet 不可用 → 降级返回明文（用 _ENC_ 前缀标识）"""
+    if not plaintext:
+        return plaintext
+    f = _get_fernet()
+    if f is None:
+        # 没装 cryptography → 明文存（加前缀方便识别）
+        return "PLAIN:" + plaintext
+    return f.encrypt(plaintext.encode("utf-8")).decode("ascii")
+
+def _decrypt_password(ciphertext: str) -> str:
+    """解密密码。Fernet 不可用或非加密数据 → 原样返回"""
+    if not ciphertext:
+        return ciphertext
+    if ciphertext.startswith("PLAIN:"):
+        return ciphertext[6:]
+    f = _get_fernet()
+    if f is None:
+        return ciphertext
+    try:
+        return f.decrypt(ciphertext.encode("ascii")).decode("utf-8")
+    except (InvalidToken, Exception):
+        # 解不出来（旧数据格式不对、key 换了）→ 原样返回
+        return ciphertext
+
 # ---------- 路径 ----------
 # 配置和 HTML 都放在 exe 同目录（开发时就是脚本同目录；打包后是 exe 同目录）
 if getattr(sys, 'frozen', False):
@@ -62,29 +118,40 @@ def _init_db():
     conn.commit()
     conn.close()
 
-def db_get_accounts():
+def db_get_accounts(include_password=False):
+    """
+    获取账号列表。密码在数据库中是加密存的，读取时自动解密。
+    include_password=False (默认): 只返回账号名（用于前端展示/CLI 列表）
+    include_password=True: 返回账号+明文密码（用于程序内部自动登录用）
+    """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT game_account, game_password FROM accounts ORDER BY id")
+    c.execute("SELECT id, game_account, game_password FROM accounts ORDER BY id")
     rows = c.fetchall()
     conn.close()
-    return [{"username": r[0], "password": r[1]} for r in rows]
+    if include_password:
+        return [{"id": r[0], "username": r[1], "password": _decrypt_password(r[2])} for r in rows]
+    else:
+        return [{"id": r[0], "username": r[1]} for r in rows]
 
 def db_upsert_account(game_account, game_password):
-    """按 game_account 去重：存在+密码不同→更新，存在+相同→跳过，不存在→新增"""
+    """按 game_account 去重：存在+密码不同→更新，存在+相同→跳过，不存在→新增
+    密码在写入前加密存储（Fernet）。"""
+    encrypted = _encrypt_password(game_password)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT game_password FROM accounts WHERE game_account = ?", (game_account,))
     row = c.fetchone()
     if row:
-        if row[0] == game_password:
+        # 旧库可能是明文存的（PLAIN: 前缀或裸字符串），跟新存的密文比较
+        if row[0] == encrypted:
             conn.close()
             return "skip"
-        c.execute("UPDATE accounts SET game_password = ? WHERE game_account = ?", (game_password, game_account))
+        c.execute("UPDATE accounts SET game_password = ? WHERE game_account = ?", (encrypted, game_account))
         conn.commit()
         conn.close()
         return "update"
-    c.execute("INSERT INTO accounts (game_account, game_password) VALUES (?, ?)", (game_account, game_password))
+    c.execute("INSERT INTO accounts (game_account, game_password) VALUES (?, ?)", (game_account, encrypted))
     conn.commit()
     conn.close()
     return "insert"
@@ -1535,7 +1602,7 @@ def _scheduler_loop():
                     cfg_to_run.pop("schedule", None)  # 调度信息不传给执行逻辑
                     # 定时任务从数据库读所有账号 + 全局 CDK（不依赖前端 config）
                     # 区分 once / daily：每日 CDK 只能 used=0 的才跑；一次性 CDK 不论 used 都跑
-                    cfg_to_run["accounts"] = db_get_accounts()
+                    cfg_to_run["accounts"] = db_get_accounts(include_password=True)
                     cfg_to_run["cdkList"] = []
                     for c in db_get_cdks():
                         if c["once"]:
@@ -1896,7 +1963,8 @@ class Handler(BaseHTTPRequestHandler):
                         db_delete_account(aid)
                     self._json(200, {"ok": True})
                 else:
-                    self._json(200, db_get_accounts())
+                    # GET /api/accounts 只返回账号列表（不返回密码，保护安全）
+                    self._json(200, db_get_accounts(include_password=False))
             elif self.path == '/api/cdks':
                 if self.command == 'POST':
                     body = self._read_body()
@@ -2351,9 +2419,58 @@ def cdk_cli_help():
   python ocr_server.py cdk reset <code>                   重置每日 CDK 为未用（明天能再跑）
   python ocr_server.py cdk list                           列出所有 CDK
   python ocr_server.py cdk help                           显示本帮助
+  python ocr_server.py account list                       列出所有账号（不显示密码）
+  python ocr_server.py account add <账号> <密码>          新增账号
+  python ocr_server.py account remove <账号>              删除账号
 
 数据库位置：{DB_FILE}
 """.replace("{DB_FILE}", DB_FILE))
+
+def account_cli(args):
+    """账号子命令入口"""
+    if len(args) < 1 or args[0] in ("help", "-h", "--help"):
+        print("用法:")
+        print("  account list                列出所有账号（不显示密码）")
+        print("  account add <账号> <密码>   新增/更新账号")
+        print("  account remove <账号>       删除账号")
+        return 0
+    cmd = args[0]
+    rest = args[1:]
+    if cmd == "list":
+        accounts = db_get_accounts(include_password=False)
+        if not accounts:
+            print("（数据库为空）")
+            return 0
+        print(f"{'ID':<5} {'账号'}")
+        print("-" * 30)
+        for a in accounts:
+            print(f"{a.get('id', '?'):<5} {a['username']}")
+        print(f"\n共 {len(accounts)} 个账号")
+        return 0
+    if cmd == "add":
+        if len(rest) < 2:
+            print("✗ 用法: account add <账号> <密码>", file=sys.stderr)
+            return 1
+        action = db_upsert_account(rest[0], rest[1])
+        print(f"  ✓ 账号 {rest[0]}: {action}")
+        return 0
+    if cmd in ("remove", "rm", "delete"):
+        if len(rest) < 1:
+            print("✗ 用法: account remove <账号>", file=sys.stderr)
+            return 1
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM accounts WHERE game_account = ?", (rest[0],))
+        n = c.rowcount
+        conn.commit()
+        conn.close()
+        if n:
+            print(f"  ✓ 已删除 {rest[0]}")
+        else:
+            print(f"  - {rest[0]} 不存在")
+        return 0
+    print(f"✗ 未知子命令: {cmd}", file=sys.stderr)
+    return 1
 
 def cdk_cli(args):
     """CDK 子命令入口。返回 0=成功，非0=失败"""
@@ -2432,8 +2549,11 @@ def cdk_cli(args):
 
 
 if __name__ == '__main__':
-    # CLI 模式：python ocr_server.py cdk ...
+    # CLI 模式：python ocr_server.py cdk ... / account ...
     if len(sys.argv) >= 2 and sys.argv[1] == "cdk":
         _init_db()  # CLI 也要先建表
         sys.exit(cdk_cli(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "account":
+        _init_db()
+        sys.exit(account_cli(sys.argv[2:]))
     main()

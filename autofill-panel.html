@@ -164,6 +164,12 @@ K 页</label>
       <button class="primary" id="testRedeemBtn">▶ 测试兑换</button>
       <span id="testRedeemStatus" style="font-size:12px;color:#666"></span>
     </div>
+    <div style="margin-top:6px;font-size:12px;color:#999">
+      <label style="cursor:pointer">
+        <input type="checkbox" id="rememberTest" checked> 记住账密（仅本浏览器，密码明文存 localStorage）
+      </label>
+      <button id="forgetTestBtn" style="margin-left:8px;padding:2px 8px;font-size:11px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px">🗑 忘记账密</button>
+    </div>
   </div>
 
   <!-- CDK 管理（后端） -->
@@ -323,6 +329,22 @@ K 页</label>
     function saveAll(c) { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); }
     function esc(s) { return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+    // ---------- 测试账密记忆 ----------
+    // 仅存本浏览器（localStorage），密码明文。不跨设备、不跨浏览器。
+    // 如要更安全：不勾"记住"即可（账密只在内存）。
+    const TEST_CREDS_KEY = "ocr_test_creds_v1";
+    function saveTestCreds(u, p) {
+      try { localStorage.setItem(TEST_CREDS_KEY, JSON.stringify({ u, p, ts: Date.now() })); }
+      catch (e) { /* localStorage 满/被禁用，忽略 */ }
+    }
+    function loadTestCreds() {
+      try { return JSON.parse(localStorage.getItem(TEST_CREDS_KEY)) || null; }
+      catch { return null; }
+    }
+    function clearTestCreds() {
+      try { localStorage.removeItem(TEST_CREDS_KEY); } catch {}
+    }
 
     function showMsg(type, msg) {
       const el = $("msg");
@@ -651,6 +673,12 @@ K 页</label>
       const u = $("testUser").value.trim();
       const p = $("testPass").value;
       if (!u || !p) { showMsg("error", "请填写账密"); return; }
+      // 记住账密（如果勾选了）
+      if ($("rememberTest").checked) {
+        saveTestCreds(u, p);
+      } else {
+        clearTestCreds();
+      }
       $("testRedeemBtn").disabled = true;
       $("testRedeemStatus").textContent = "提交中…";
       try {
@@ -1038,6 +1066,26 @@ K 页</label>
           }
         }
       } catch (e) { /* 离线时隐藏 */ }
+
+      // 4. 加载上次记住的测试账密
+      const saved = loadTestCreds();
+      if (saved && saved.u) {
+        $("testUser").value = saved.u || "";
+        $("testPass").value = saved.p || "";
+        $("rememberTest").checked = true;
+      } else {
+        $("rememberTest").checked = false;
+      }
+
+      // 5. 绑定"忘记账密"按钮
+      $("forgetTestBtn").onclick = () => {
+        if (!confirm("确定忘记？将清除本浏览器保存的测试账密。")) return;
+        clearTestCreds();
+        $("testUser").value = "";
+        $("testPass").value = "";
+        $("rememberTest").checked = false;
+        showMsg("success", "已忘记账密");
+      };
     })();
   </script>
 </body>
