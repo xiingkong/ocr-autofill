@@ -141,14 +141,16 @@ K 页</label>
 
   <!-- 账号管理 -->
   <div class="card">
-    <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（油猴会按顺序逐个登录/兑换）</span></h2>
+    <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（仅显示本机添加的账号，其他人的不显示）</span></h2>
     <table id="accountTable">
       <thead>
         <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
       </thead>
       <tbody></tbody>
     </table>
-    <div style="margin-top:8px">
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <input id="newAccountUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
+      <input id="newAccountPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
       <button class="primary" id="addAccount">+ 添加账号</button>
     </div>
   </div>
@@ -164,7 +166,7 @@ K 页</label>
     </p>
     <table id="cdkTable">
       <thead>
-        <tr><th>CDK</th><th>调度</th><th>起始日期</th><th>今日</th><th>操作</th></tr>
+        <tr><th>CDK</th><th>调度</th><th>状态</th><th>今日</th><th>操作</th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -229,25 +231,35 @@ K 页</label>
             label: "登录页",
             urlPattern: "/player/login",
             actions: [
-              { type: "fill", selector: "input[placeholder*='账']", value: "{username}" },
-              { type: "fill", selector: "input[type=password]", value: "{password}" },
-              { type: "captcha", selector: "img[src*='captcha'], img.captcha, img.verify", inputSelector: "input[placeholder*='验'], input[name*='code']" },
-              { type: "click", selector: "button[type=submit], button.login-btn, .login-btn" }
+              { type: "fill", selector: "#account", value: "{username}" },
+              { type: "fill", selector: "#password", value: "{password}" },
+              { type: "captcha", selector: "#verifyCode", inputSelector: "#captcha" },
+              { type: "click", selector: "#SubmitBtn" }
             ]
           },
           claim: {
             label: "登录后领取页",
             urlPattern: "/player/index",
             autoGoto: false,
-            actions: []
+            actions: [
+              { type: "select", selector: "#giftServer", value: "六区" },
+              { type: "click", selector: "#giftGetRoleList" },
+              { type: "select", selector: "#giftRoles", value: "2" },
+              { type: "click", selector: "#giftAddToCart" },
+              { type: "click", selector: "#cartSubmitBtn" }
+            ]
           },
           cdk: {
             label: "CDK兑换页",
             urlPattern: "/index/cdk",
             actions: [
-              { type: "fill", selector: "input[placeholder*='CDK'], input[name*='cdk'], input[name*='code']", value: "{cdk}" },
-              { type: "captcha", selector: "img[src*='captcha'], img.captcha, img.verify", inputSelector: "input[placeholder*='验'], input[name*='code']" },
-              { type: "click", selector: "button[type=submit], button.submit-btn, .submit" }
+              { type: "select", selector: "#server", value: "六区" },
+              { type: "fill", selector: "#account", value: "{username}" },
+              { type: "click", selector: "#getRoleList" },
+              { type: "select", selector: "#roles", value: "2" },
+              { type: "fill", selector: "#cdk", value: "{cdk}" },
+              { type: "captcha", selector: "#verifyCode", inputSelector: "#captcha" },
+              { type: "click", selector: "#SubmitBtn" }
             ]
           }
         },
@@ -348,8 +360,8 @@ K 页</label>
         </tr>`
       ).join("");
     }
-    function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; }
-    function removeAccount(i) { currentConfig.accounts.splice(i, 1); renderAccounts(); }
+    function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; syncConfigToServer(); }
+    function removeAccount(i) { currentConfig.accounts.splice(i, 1); renderAccounts(); syncConfigToServer(); }
 
     // 渲染 CDK 表
     function renderCdk() {
@@ -363,18 +375,11 @@ K 页</label>
       tbody.innerHTML = currentConfig.cdkList.map((c, i) => {
         const active = isActiveToday(c, today);
         return `<tr>
-          <td><input value="${esc(c.value)}" onchange="updCdk(${i},'value',this.value)"></td>
-          <td>
-            <select onchange="updCdk(${i},'schedule',this.value)">
-              <option value="daily" ${c.schedule==='daily'?'selected':''}>每日</option>
-              <option value="weekly" ${c.schedule==='weekly'?'selected':''}>每7日</option>
-              <option value="monthly" ${c.schedule==='monthly'?'selected':''}>每30日</option>
-              <option value="once" ${c.schedule==='once'?'selected':''}>一次性</option>
-            </select>
-          </td>
-          <td><input type="date" value="${esc(c.startDate)}" onchange="updCdk(${i},'startDate',this.value)"></td>
+          <td><code>${esc(c.value)}</code></td>
+          <td><span class="badge daily">每日</span></td>
+          <td>${c.used ? '<span class="badge" style="background:#eee">已用</span>' : '<span class="badge active">可用</span>'}</td>
           <td>${active ? '<span class="badge active">激活</span>' : '<span style="color:#999">-</span>'}</td>
-          <td><button class="danger" onclick="removeCdk(${i})">删除</button></td>
+          <td><button class="danger" onclick="deleteCdkServer(${c.id})">删除</button></td>
         </tr>`;
       }).join("");
 
@@ -389,6 +394,30 @@ K 页</label>
     }
     function updCdk(i, k, v) { currentConfig.cdkList[i][k] = v; renderCdk(); }
     function removeCdk(i) { currentConfig.cdkList.splice(i, 1); renderCdk(); }
+
+    // 从服务器加载全局 CDK 列表
+    async function loadCdksFromServer() {
+      try {
+        const r = await fetch(SERVER + "/api/cdks");
+        if (!r.ok) return;
+        const list = await r.json();
+        // 用服务器数据覆盖本地 cdkList（CDK 全局共享）
+        currentConfig.cdkList = list.map(c => ({ id: c.id, value: c.code, schedule: "daily", startDate: new Date().toISOString().slice(0,10), used: c.used }));
+        renderCdk();
+      } catch (e) { /* 离线忽略 */ }
+    }
+
+    // 删除 CDK（服务器）
+    async function deleteCdkServer(id) {
+      try {
+        await fetch(SERVER + "/api/cdks", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id })
+        });
+        loadCdksFromServer();
+      } catch (e) { showMsg("error", "删除失败"); }
+    }
 
     // 渲染页面操作配置
     function renderPageConfig() {
@@ -579,11 +608,55 @@ K 页</label>
     });
 
     // 按钮事件
-    $("addAccount").onclick = () => { currentConfig.accounts.push({ id: uid(), username: "", password: "", enabled: true }); renderAccounts(); };
-    $("addCdk").onclick = () => {
-      const today = new Date().toISOString().slice(0, 10);
-      currentConfig.cdkList.push({ id: uid(), value: "", schedule: "daily", startDate: today });
-      renderCdk();
+    $("addAccount").onclick = async () => {
+      const u = $("newAccountUser").value.trim();
+      const p = $("newAccountPass").value.trim();
+      if (!u || !p) { showMsg("error", "请输入账号和密码"); return; }
+      // 上传到数据库（按账号去重）
+      try {
+        const r = await fetch(SERVER + "/api/accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const d = await r.json();
+        if (d.ok) {
+          const actionMap = { insert: "已添加", update: "密码已更新", skip: "已存在" };
+          showMsg("success", `账号 ${u} ${actionMap[d.action] || "处理完成"}`);
+          // 也存到本地 currentConfig（只显示本机添加的）
+          const idx = currentConfig.accounts.findIndex(a => a.username === u);
+          if (idx >= 0) currentConfig.accounts[idx].password = p;
+          else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true });
+          renderAccounts();
+          syncConfigToServer();
+          $("newAccountUser").value = "";
+          $("newAccountPass").value = "";
+        } else {
+          showMsg("error", d.error || "添加失败");
+        }
+      } catch (e) {
+        showMsg("error", "网络错误：" + e.message);
+      }
+    };
+    $("addCdk").onclick = async () => {
+      const code = prompt("请输入 CDK 码：");
+      if (!code) return;
+      try {
+        const r = await fetch(SERVER + "/api/cdks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code.trim() })
+        });
+        const d = await r.json();
+        if (d.ok) {
+          showMsg("success", "CDK 已添加");
+          loadCdksFromServer();
+        } else {
+          showMsg("error", "CDK 已存在或添加失败");
+        }
+      } catch (e) {
+        showMsg("error", "网络错误：" + e.message);
+      }
     };
 
     // 抽出来的保存函数：一键执行和"保存"按钮都调用它
@@ -915,6 +988,7 @@ K 页</label>
       renderAccounts();
       renderCdk();
       renderPageConfig();
+      loadCdksFromServer();
 
       // 3. 拉后端信息生成二维码（PC 端才有意义）
       try {
