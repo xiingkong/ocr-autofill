@@ -1863,20 +1863,17 @@ def _run_job_impl(job_id, config, emit):
             job["result"] = "completed"
     emit("\n✅ 全部完成")
     # 持久化 CDK 状态到数据库
-    # - 一次性 CDK：跑完一轮全删（不管成功失败）
-    # - 每日 CDK：标 used=1（明天不再跑）
-    # - 不论成功失败都标 used=1（避免每天重复跑同一个 CDK）
+    # - 每日 CDK（schedule != "once"）：不动 used=0，可反复跑
+    # - 一次性 CDK（schedule == "once"）：标 used=1，用过的不再 append
+    # 注：旧的"删 once"和"daily 标 used"逻辑已移除（避免 daily 池子被锁、once 误删）
     try:
-        n = db_delete_once_cdks()
-        if n:
-            emit(f"  ✓ 已删除 {n} 个一次性 CDK")
         n_marked = 0
         for cdk in cdk_list:
-            if cdk.get("schedule") != "once":
+            if cdk.get("schedule") == "once":
                 if db_mark_cdk_used(cdk.get("code", "")):
                     n_marked += 1
         if n_marked:
-            emit(f"  ✓ {n_marked} 个每日 CDK 已标已用（明天不会重跑）")
+            emit(f"  ✓ {n_marked} 个一次性 CDK 已标已用")
     except Exception as e:
         emit(f"  ⚠ 保存 CDK 状态失败: {e}", "warn")
     # 把更新后的 cdkList 写回（给面板同步）
@@ -2193,14 +2190,15 @@ class Handler(BaseHTTPRequestHandler):
                 password = (body.get("password") or "").strip()
                 if not username or not password:
                     return self._json(400, {"error": "账号密码不能为空"})
-                # 用 G2 策略：所有每日 CDK 各跑一次
+                # 过滤可用 CDK：daily 一直是 0（可反复跑），once 用完才变 1（用过的过滤掉）
                 active_cdks = []
                 for c in db_get_cdks():
+                    if c["used"]:
+                        continue
                     if c["once"]:
                         active_cdks.append({"code": c["code"], "schedule": "once", "used": False})
                     else:
-                        if not c["used"]:
-                            active_cdks.append({"code": c["code"], "schedule": "daily", "used": False})
+                        active_cdks.append({"code": c["code"], "schedule": "daily", "used": False})
                 if not active_cdks:
                     return self._json(400, {"error": "后端 CDK 池为空，请先用 cdk add-daily 加"})
                 # 组装 config（只跑 cdk target，但实际 _run_job_impl 会跑 login+cdk）
@@ -2418,9 +2416,10 @@ def cdk_cli_help():
     print("""CDK 管理命令（终端运行，不用启 HTTP 服务）:
 
   python ocr_server.py cdk add-daily <code1> [code2 ...]   添加每日 CDK
-  python ocr_server.py cdk add-once <code1> [code2 ...]   添加一次性 CDK（跑完一轮自动删）
+  python ocr_server.py cdk add-once <code1> [code2 ...]   添加一次性 CDK（跑完一次后 used=1，不再参与）
   python ocr_server.py cdk remove <code>                  删除指定 CDK
   python ocr_server.py cdk reset <code>                   重置每日 CDK 为未用（明天能再跑）
+  python ocr_server.py cdk reset-all                     一次性重置所有每日 CDK 为未用（调试反复跑用）
   python ocr_server.py cdk list                           列出所有 CDK
   python ocr_server.py cdk help                           显示本帮助
   python ocr_server.py account list                       列出所有账号（不显示密码）
@@ -2532,6 +2531,19 @@ def cdk_cli(args):
                 print(f"  ✓ 已重置 {code} 为未用")
             else:
                 print(f"  - {code} 不存在")
+        return 0
+    if cmd == "reset-all":
+        # 一次性重置所有每日 CDK（once=0）为未用，方便反复跑测试
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("UPDATE cdks SET used = 0 WHERE once = 0")
+        n = c.rowcount
+        conn.commit()
+        conn.close()
+        if n:
+            print(f"  ✓ 已重置 {n} 个每日 CDK 为未用")
+        else:
+            print("  - 没有每日 CDK 需要重置")
         return 0
     if cmd == "list":
         cdks = db_get_cdks()
