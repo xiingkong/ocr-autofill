@@ -1687,6 +1687,21 @@ def _run_job_impl(job_id, config, emit):
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
                 page = context.new_page()
+                # 阻断第三方 analytics 脚本（devbox 数据中心 IP 容易被这些 CDN 限速，
+                # 它们又是同步 script，会拖慢 DCL + 后续 click 等元素；阻断对业务无副作用）
+                def _route(route):
+                    url = route.request.url
+                    if any(h in url for h in [
+                        "cloudflareinsights.com",
+                        "google-analytics.com",
+                        "googletagmanager.com",
+                        "facebook.net",
+                        "doubleclick.net",
+                    ]):
+                        route.abort()
+                    else:
+                        route.continue_()
+                page.route("**/*", _route)
                 # 反爬：隐藏 webdriver
                 page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
                 # 监听 JS 弹窗：emit 日志后自动 accept，避免卡住任务
