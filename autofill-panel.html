@@ -911,7 +911,7 @@ K 页</label>
       $("pauseBtn").dataset.paused = "0";
 
       try {
-        const resp = await fetch(SERVER + "/run", {
+        const resp = await fetch(SERVER + "/api/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ config: cfg })

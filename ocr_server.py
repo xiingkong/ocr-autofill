@@ -91,7 +91,11 @@ else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     MEIPASS = APP_DIR
 CONFIG_FILE = os.path.join(APP_DIR, "autofill_config.json")
-DB_FILE = os.path.join(APP_DIR, "autofill.db")
+# 数据目录：环境变量 AUTOFILL_DATA_DIR 优先（容器部署时指向挂载的 volume，
+# 避免 db 写进镜像/容器内、重启/重新部署就丢）。未设时回退到脚本同目录。
+_DATA_DIR = os.environ.get("AUTOFILL_DATA_DIR", APP_DIR)
+os.makedirs(_DATA_DIR, exist_ok=True)
+DB_FILE = os.path.join(_DATA_DIR, "autofill.db")
 
 # ---------- SQLite 数据库 ----------
 def _init_db():
