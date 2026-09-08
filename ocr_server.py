@@ -2180,6 +2180,23 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._read_body()
                 ok = save_persisted_config(body)
                 self._json(200, {"ok": ok, "file": CONFIG_FILE})
+            elif self.path == '/api/accounts':
+                # 添加/更新账号（前端 + 添加账号 按钮）
+                body = self._read_body()
+                ga = (body.get("username") or body.get("game_account") or "").strip()
+                gp = (body.get("password") or body.get("game_password") or "").strip()
+                if not ga or not gp:
+                    return self._json(400, {"error": "账号密码不能为空"})
+                action = db_upsert_account(ga, gp)
+                self._json(200, {"ok": True, "action": action})
+            elif self.path == '/api/cdks':
+                # 添加 CDK（前端如有用到）
+                body = self._read_body()
+                code = (body.get("code") or "").strip()
+                if not code:
+                    return self._json(400, {"error": "CDK 不能为空"})
+                ok = db_add_cdk(code, once=0)
+                self._json(200, {"ok": ok})
             elif self.path.startswith('/ocr'):
                 body = self._read_body()
                 img_b64 = body.get("image_base64", "")
