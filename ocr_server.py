@@ -98,9 +98,64 @@ _DATA_DIR = os.environ.get("AUTOFILL_DATA_DIR", APP_DIR)
 os.makedirs(_DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(_DATA_DIR, "autofill.db")
 
+# ---------- 运行设置（并发数等，命令 cc 管理） ----------
+SETTINGS_FILE = os.path.join(_DATA_DIR, "autofill_settings.json")
+_SETTINGS_LOCK = threading.Lock()
+
+def _load_settings():
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _save_settings(d):
+    with _SETTINGS_LOCK:
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+def get_concurrency():
+    """并发数：环境变量 AUTOFILL_CONCURRENCY > cc 命令设置 > 默认 3"""
+    try:
+        v = int(os.environ.get("AUTOFILL_CONCURRENCY", "").strip())
+        if v >= 1:
+            return v
+    except Exception:
+        pass
+    try:
+        v = int(_load_settings().get("concurrency", 0))
+        if v >= 1:
+            return v
+    except Exception:
+        pass
+    return 3
+
+def set_concurrency(n):
+    n = int(n)
+    if n < 1:
+        raise ValueError("并发数必须是 >=1 的整数")
+    d = _load_settings()
+    d["concurrency"] = n
+    _save_settings(d)
+    return n
+
+def _db_conn():
+    """带写等待超时的数据库连接：并发写时不直接报错，最多等 30 秒"""
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+    except Exception:
+        pass
+    return conn
+
 # ---------- SQLite 数据库 ----------
 def _init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +199,7 @@ def db_get_accounts(include_password=False):
     include_password=True: 返回账号+明文密码（用于程序内部自动登录用）
     每个账号带 regions（区列表，可能多个）。
     """
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("SELECT id, game_account, game_password, regions FROM accounts ORDER BY id")
     rows = c.fetchall()
@@ -160,7 +215,7 @@ def db_upsert_account(game_account, game_password, regions=None):
     regions: 新增账号时记录的区列表（JSON 数组）。已存在账号不改动区。"""
     encrypted = _encrypt_password(game_password)
     regs_json = json.dumps([str(r).strip() for r in (regions or []) if str(r).strip()], ensure_ascii=False) if regions else '[]'
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("SELECT game_password FROM accounts WHERE game_account = ?", (game_account,))
     row = c.fetchone()
@@ -179,7 +234,7 @@ def db_upsert_account(game_account, game_password, regions=None):
     return "insert"
 
 def db_delete_account(aid):
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("DELETE FROM accounts WHERE id = ?", (aid,))
     conn.commit()
@@ -187,7 +242,7 @@ def db_delete_account(aid):
 
 def db_get_account_row(game_account):
     """返回账号数据库行 (id, game_account, game_password, regions) 或 None"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("SELECT id, game_account, game_password, regions FROM accounts WHERE game_account = ?", (game_account,))
     row = c.fetchone()
@@ -209,7 +264,7 @@ def db_add_account_regions(game_account, regions):
             cur.append(r)
             changed = True
     if changed:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("UPDATE accounts SET regions = ? WHERE game_account = ?", (json.dumps(cur, ensure_ascii=False), game_account))
         conn.commit()
@@ -234,7 +289,7 @@ def db_set_account_regions(game_account, regions):
     row = db_get_account_row(game_account)
     if not row:
         return None
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("UPDATE accounts SET regions = ? WHERE game_account = ?", (json.dumps(seen, ensure_ascii=False), game_account))
     conn.commit()
@@ -242,7 +297,7 @@ def db_set_account_regions(game_account, regions):
     return seen
 
 def db_get_cdks():
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("SELECT id, code, used, once FROM cdks ORDER BY id")
     rows = c.fetchall()
@@ -250,7 +305,7 @@ def db_get_cdks():
     return [{"id": r[0], "code": r[1], "used": bool(r[2]), "once": bool(r[3])} for r in rows]
 
 def db_add_cdk(code, once=0):
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     try:
         c.execute("INSERT INTO cdks (code, once) VALUES (?, ?)", (code, once))
@@ -262,7 +317,7 @@ def db_add_cdk(code, once=0):
         conn.close()
 
 def db_delete_cdk(cid):
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("DELETE FROM cdks WHERE id = ?", (cid,))
     conn.commit()
@@ -270,7 +325,7 @@ def db_delete_cdk(cid):
 
 def db_delete_cdk_by_code(code):
     """按 code 删（CLI 用）"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("DELETE FROM cdks WHERE code = ?", (code,))
     deleted = c.rowcount
@@ -280,7 +335,7 @@ def db_delete_cdk_by_code(code):
 
 def db_delete_once_cdks():
     """删所有一次性 CDK（跑完一轮后调）"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("DELETE FROM cdks WHERE once = 1")
     deleted = c.rowcount
@@ -290,7 +345,7 @@ def db_delete_once_cdks():
 
 def db_reset_cdk(code):
     """重置某 CDK 为未用（每日 CDK 想重跑时）"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("UPDATE cdks SET used = 0 WHERE code = ?", (code,))
     updated = c.rowcount
@@ -299,7 +354,7 @@ def db_reset_cdk(code):
     return updated
 
 def db_mark_cdk_used(code):
-    conn = sqlite3.connect(DB_FILE)
+    conn = _db_conn()
     c = conn.cursor()
     c.execute("UPDATE cdks SET used = 1 WHERE code = ?", (code,))
     conn.commit()
@@ -382,13 +437,32 @@ WRONG_PWD_KEYWORDS = ["账号或密码错误", "密码错误", "密码不正确"
 # 重试控制：错了刷图重 OCR，最多 3 次
 MAX_CAPTCHA_RETRY = 3
 # 验证码上下文：OCR 时设置，click 时检查并清空
-captcha_ctx = {
+class _CaptchaCtxProxy:
+    """线程隔离的验证码上下文：每个线程一份 dict，并行跑互不串数据。
+    保持 dict 接口（__getitem__/__setitem__/get），do_op 等现有代码零改动。"""
+    def __init__(self, seed):
+        self._seed = dict(seed)
+        self._local = threading.local()
+    def _d(self):
+        v = getattr(self._local, "v", None)
+        if v is None:
+            v = dict(self._seed)
+            self._local.v = v
+        return v
+    def __getitem__(self, k):
+        return self._d()[k]
+    def __setitem__(self, k, v):
+        self._d()[k] = v
+    def get(self, k, d=None):
+        return self._d().get(k, d)
+
+captcha_ctx = _CaptchaCtxProxy({
     "active": False,        # 当前是否有等待检查的 captcha
     "image_sel": "",        # 验证码图片选择器
     "input_sel": "",        # 验证码输入框选择器
     "attempts": 0,          # 已重试次数
     "last_result": None,    # "success" / "failure" / "wrong_pwd" / None —— 给外层轮次循环判断用
-}
+})
 
 def preprocess_captcha_image(img_bytes):
     """B. 二值化预处理：转灰度 + 阈值去噪。需要 Pillow，没有就返回 None。"""
@@ -1733,6 +1807,135 @@ def _override_region_selects(pages_cfg, region):
 
 
 def _run_job_impl(job_id, config, emit):
+    """要求4 并发入口：按账号分组并发执行；并发=1 或单账号时走原串行逻辑（_run_job_impl_serial）。"""
+    if not playwright:
+        emit("✗ Playwright 未安装，无法执行", "error")
+        JOBS[job_id]["status"] = "error"
+        return
+
+    accounts = config.get("accounts", [])
+    if not accounts:
+        emit("✗ 没有账号", "error")
+        JOBS[job_id]["status"] = "error"
+        return
+
+    cdk_list = config.get("cdkList", [])
+    pages_cfg = config.get("pages", {})
+    domain = config.get("domain", "")
+    browser_type = (config.get("browserType") or os.environ.get("BROWSER_TYPE") or "msedge").lower()
+    launch_kwargs = {
+        "headless": config.get("headless", True),  # 改回 True
+        "args": ["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+    }
+    if browser_type in ("msedge", "chrome"):
+        launch_kwargs["channel"] = browser_type
+    run_targets = config.get("runTargets") or ["login", "cdk"]
+
+    concurrency = get_concurrency()
+    if concurrency < 1:
+        concurrency = 1
+    # 按账号分组（同一账号的多区在组内顺序跑，不并发登同一账号）
+    groups = []
+    group_map = {}
+    for acc in accounts:
+        k = id(acc)
+        g = group_map.get(k)
+        if g is None:
+            g = {"account": acc}
+            group_map[k] = g
+            groups.append(g)
+    worker_count = min(concurrency, len(groups))
+    emit(f"🧵 并发数: {concurrency}，账号: {len(groups)} 个，工作线程: {worker_count}")
+
+    # 并发=1：走原串行逻辑，日志与之前完全一致
+    if worker_count == 1:
+        _run_job_impl_serial(job_id, config, emit, quiet=False)
+        return
+
+    # 并行：一次性 CDK 按线程切分（互斥不重复），每日 CDK 每个线程共享全部
+    active_cdks = [c for c in cdk_list if cdk_active_today(c)]
+    emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
+    if active_cdks:
+        for c in active_cdks:
+            emit(f"  - [{c.get('schedule')}] {c.get('code', '')[:20]}...")
+    emit(f"🌐 启动浏览器: {browser_type} (headless={launch_kwargs['headless']})")
+    emit(f"🎯 执行目标: {', '.join(run_targets)}")
+
+    once_cdks = [c for c in active_cdks if c.get("schedule") == "once"]
+    daily_cdks = [c for c in active_cdks if c.get("schedule") != "once"]
+
+    base_cfg = {
+        "domain": domain,
+        "pages": pages_cfg,
+        "runTargets": run_targets,
+        "browserType": config.get("browserType"),
+        "headless": config.get("headless", True),
+    }
+
+    errors = []
+    errors_lock = threading.Lock()
+
+    def _worker(wi, wgroups):
+        w_cdks = daily_cdks + list(once_cdks[wi::worker_count])
+        for g in wgroups:
+            gcfg = dict(base_cfg)
+            gcfg["accounts"] = [g["account"]]
+            gcfg["cdkList"] = list(w_cdks)
+            try:
+                _run_job_impl_serial(job_id, gcfg, emit, quiet=True)
+            except Exception as e:
+                with errors_lock:
+                    errors.append(str(e))
+                emit(f"✗ 线程异常（账号 {g['account'].get('username', '?')}）: {e}", "error")
+
+    threads = []
+    for wi in range(worker_count):
+        t = threading.Thread(target=_worker, args=(wi, groups[wi::worker_count]), daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+
+    # 汇总结果
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        cancelled = bool(job and job.get("cancel_requested"))
+    if cancelled:
+        with JOBS_LOCK:
+            if job: job["status"] = "cancelled"
+        return  # 取消不标 CDK（与原逻辑一致）
+    if errors and len(errors) >= worker_count:
+        with JOBS_LOCK:
+            if job: job["status"] = "error"
+        emit("✗ 全部工作线程异常，任务失败", "error")
+        return
+    if errors:
+        emit(f"⚠ {len(errors)} 个工作线程异常（其余正常），任务完成", "warn")
+
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job:
+            job["status"] = "done"
+            job["result"] = "completed"
+    emit("\n✅ 全部完成")
+    # 持久化 CDK 状态到数据库（各 worker 已标记各自子集，这里兜底全量）
+    try:
+        n_marked = 0
+        for cdk in cdk_list:
+            if cdk.get("schedule") == "once":
+                if db_mark_cdk_used(cdk.get("code", "")):
+                    n_marked += 1
+        if n_marked:
+            emit(f"  ✓ {n_marked} 个一次性 CDK 已标已用")
+    except Exception as e:
+        emit(f"  ⚠ 保存 CDK 状态失败: {e}", "warn")
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job:
+            job["updatedConfig"] = config
+
+
+def _run_job_impl_serial(job_id, config, emit, quiet=False):
     if not playwright:
         emit("✗ Playwright 未安装，无法执行", "error")
         JOBS[job_id]["status"] = "error"
@@ -1756,10 +1959,11 @@ def _run_job_impl(job_id, config, emit):
 
     # 筛选今日活跃 CDK
     active_cdks = [c for c in cdk_list if cdk_active_today(c)]
-    emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
-    if active_cdks:
-        for c in active_cdks:
-            emit(f"  - [{c.get('schedule')}] {c.get('code', '')[:20]}...")
+    if not quiet:
+        emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
+        if active_cdks:
+            for c in active_cdks:
+                emit(f"  - [{c.get('schedule')}] {c.get('code', '')[:20]}...")
 
     if not accounts:
         emit("✗ 没有账号", "error")
@@ -1776,11 +1980,13 @@ def _run_job_impl(job_id, config, emit):
         launch_kwargs["channel"] = browser_type
     # browser_type == "chromium" 时不传 channel，用 Playwright 自带的（需先 playwright install chromium）
 
-    emit(f"🌐 启动浏览器: {browser_type} (headless={launch_kwargs['headless']})")
+    if not quiet:
+        emit(f"🌐 启动浏览器: {browser_type} (headless={launch_kwargs['headless']})")
 
     # 选择要执行的页面（前端勾选，默认两个都跑）
     run_targets = config.get("runTargets") or ["login", "cdk"]
-    emit(f"🎯 执行目标: {', '.join(run_targets)}")
+    if not quiet:
+        emit(f"🎯 执行目标: {', '.join(run_targets)}")
 
     # 先试启动浏览器，失败给出明确提示
     try:
@@ -2602,6 +2808,7 @@ def cdk_cli_help():
   python ocr_server.py account list                       列出所有账号（不显示密码）
   python ocr_server.py account add <账号> <密码>          新增账号
   python ocr_server.py account remove <账号>              删除账号
+  python ocr_server.py cc [数字]                          查看/设置并发数（默认 3，>=1 整数）
 
 数据库位置：{DB_FILE}
 """.replace("{DB_FILE}", DB_FILE))
@@ -2639,7 +2846,7 @@ def account_cli(args):
         if len(rest) < 1:
             print("✗ 用法: account remove <账号>", file=sys.stderr)
             return 1
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("DELETE FROM accounts WHERE game_account = ?", (rest[0],))
         n = c.rowcount
@@ -2712,7 +2919,7 @@ def cdk_cli(args):
         return 0
     if cmd == "reset-all":
         # 一次性重置所有每日 CDK（once=0）为未用，方便反复跑测试
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("UPDATE cdks SET used = 0 WHERE once = 0")
         n = c.rowcount
@@ -2742,12 +2949,37 @@ def cdk_cli(args):
     return 1
 
 
+def concurrency_cli(args):
+    """并发数子命令：cc 查看 / cc <数字> 设置（默认 3）"""
+    if args and args[0] in ("help", "-h", "--help"):
+        print("用法:")
+        print("  cc          查看当前并发数（默认 3）")
+        print("  cc <数字>   设置并发数（>=1 的整数，保存后重启仍生效；环境变量 AUTOFILL_CONCURRENCY 优先）")
+        return 0
+    if not args:
+        print(f"当前并发数: {get_concurrency()}")
+        print("来源优先级：环境变量 AUTOFILL_CONCURRENCY > cc 命令设置 > 默认 3")
+        return 0
+    try:
+        n = int(args[0])
+        if n < 1:
+            raise ValueError()
+        set_concurrency(n)
+        print(f"✓ 并发数已设为 {n}（环境变量 AUTOFILL_CONCURRENCY 设置时优先于它）")
+        return 0
+    except ValueError:
+        print("✗ 用法: cc <数字>（>=1 的整数）", file=sys.stderr)
+        return 1
+
+
 if __name__ == '__main__':
-    # CLI 模式：python ocr_server.py cdk ... / account ...
+    # CLI 模式：python ocr_server.py cdk ... / account ... / cc ...
     if len(sys.argv) >= 2 and sys.argv[1] == "cdk":
         _init_db()  # CLI 也要先建表
         sys.exit(cdk_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "account":
         _init_db()
         sys.exit(account_cli(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "cc":
+        sys.exit(concurrency_cli(sys.argv[2:]))
     main()
