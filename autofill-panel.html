@@ -125,6 +125,12 @@
     </div>
   </div>
 
+  <div class="row" style="margin-bottom:10px">
+    <label>当前区</label>
+    <input id="currentRegion" placeholder="输入汉字几区，如：六区" style="flex:0 1 240px;min-width:120px">
+    <span style="color:#999;font-size:12px">输入汉字几区（如：六区），同步到 CDK 页和领取页的区下拉框</span>
+  </div>
+
   <div class="toolbar">
     <button id="runAll" style="background:#1976d2;color:#fff;border:0;padding:8px 20px;font-size:14px;font-weight:bold;border-radius:3px;cursor:pointer">🚀 一键执行全部</button>
     <span style="color:#999;font-size:12px;margin:0 8px">执行:</span>
@@ -188,6 +194,29 @@ K 页</label>
         <input type="checkbox" id="rememberTest" checked> 记住账密（仅本浏览器，密码明文存 localStorage）
       </label>
       <button id="forgetTestBtn" style="margin-left:8px;padding:2px 8px;font-size:11px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px">🗑 忘记账密</button>
+    </div>
+  </div>
+
+  <!-- 账号区查询/修改（要求2：密码校验后查看/修改账号的区） -->
+  <div class="card">
+    <h2>账号区查询/修改 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码验证，可查看/修改该账号的区）</span></h2>
+    <div class="row">
+      <label>账号</label>
+      <input id="regionQueryUser" placeholder="游戏账号">
+      <label style="width:60px">密码</label>
+      <input id="regionQueryPass" type="password" placeholder="游戏密码">
+      <button class="primary" id="regionQueryBtn">查询</button>
+    </div>
+    <div id="regionQueryResult" style="display:none;margin-top:8px;padding:10px;background:#fafafa;border:1px solid #eee;border-radius:4px">
+      <div style="font-size:13px;margin-bottom:6px">账号 <b id="regionQueryName"></b> 当前的区：</div>
+      <div id="regionTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+      <div class="row" style="margin:0">
+        <label style="width:auto;color:#666">新增区</label>
+        <input id="regionNewInput" placeholder="输入汉字几区，如：六区" style="flex:0 1 220px">
+        <button id="regionAddBtn">+ 添加</button>
+        <button class="primary" id="regionSaveBtn">保存修改</button>
+      </div>
+      <div style="font-size:12px;color:#999;margin-top:6px">输入汉字几区（如：六区）。定时任务会按账号保存的区逐个跑。</div>
     </div>
   </div>
 
@@ -693,7 +722,7 @@ K 页</label>
         const r = await fetch(SERVER + "/api/accounts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p })
+          body: JSON.stringify({ username: u, password: p, regions: [currentRegionValue()] })
         });
         const d = await r.json();
         if (d.ok) {
@@ -702,7 +731,7 @@ K 页</label>
           // 也存到本地 currentConfig（只显示本机添加的）
           const idx = currentConfig.accounts.findIndex(a => a.username === u);
           if (idx >= 0) currentConfig.accounts[idx].password = p;
-          else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: "六区" });
+          else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: currentRegionValue() });
           renderAccounts();
           syncConfigToServer();
           persistLocalConfig();  // 入库逻辑不变，额外存一份本浏览器，作为本机显示来源
@@ -734,7 +763,7 @@ K 页</label>
         const r = await fetch(SERVER + "/api/test-redeem", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p })
+          body: JSON.stringify({ username: u, password: p, regions: [currentRegionValue()] })
         });
         const d = await r.json();
         if (d.error) {
@@ -761,7 +790,7 @@ K 页</label>
                 // 后端入库逻辑不变；这里把账号也加入本浏览器列表并落 localStorage（本机显示来源）
                 const idx = currentConfig.accounts.findIndex(a => a.username === u);
                 if (idx >= 0) currentConfig.accounts[idx].password = p;
-                else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: "六区" });
+                else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: currentRegionValue() });
                 renderAccounts();
                 persistLocalConfig();
               } else {
@@ -774,6 +803,101 @@ K 页</label>
         $("testRedeemStatus").textContent = "✗ " + e.message;
         $("testRedeemBtn").disabled = false;
       }
+    };
+
+    // ---------- 当前区：操作栏上方的文本框，同步到 CDK页#server / 领取页#giftServer ----------
+    // 单向联动：文本框 → 页面配置里的区下拉框
+    const REGION_SELECTORS = ["#server", "#giftServer"];
+    function currentRegionValue() {
+      const v = ($("currentRegion").value || "").trim();
+      return v || "六区";
+    }
+    function refreshRegionInput() {
+      // 从页面配置里的区下拉框回填（默认六区）
+      let val = "六区";
+      for (const key of ["claim", "cdk"]) {
+        const page = currentConfig.pages[key];
+        if (!page || !Array.isArray(page.actions)) continue;
+        const sel = page.actions.find(a => a && a.type === "select" && REGION_SELECTORS.indexOf(a.selector) >= 0);
+        if (sel && sel.value) { val = sel.value; break; }
+      }
+      $("currentRegion").value = val;
+    }
+    function applyRegionToPages(region) {
+      for (const key of ["cdk", "claim"]) {
+        const page = currentConfig.pages[key];
+        if (!page || !Array.isArray(page.actions)) continue;
+        for (const op of page.actions) {
+          if (op && op.type === "select" && REGION_SELECTORS.indexOf(op.selector) >= 0) {
+            op.value = region;
+          }
+        }
+      }
+      renderPageConfig();
+      syncConfigToServer();
+      persistLocalConfig();
+    }
+    $("currentRegion").onchange = () => {
+      applyRegionToPages(currentRegionValue());
+      showMsg("success", "当前区已设为 " + currentRegionValue() + "，已同步到 CDK 页/领取页");
+    };
+
+    // ---------- 账号区查询/修改（要求2） ----------
+    let regionEditing = [];  // 当前编辑中的区列表
+    function renderRegionTags() {
+      const box = $("regionTags");
+      if (!regionEditing.length) {
+        box.innerHTML = '<span style="color:#999;font-size:13px">（还没有区，执行时默认用页面配置里的区）</span>';
+        return;
+      }
+      box.innerHTML = regionEditing.map((r, i) =>
+        `<span class="badge" style="background:#e3f2fd;color:#1565c0;font-size:12px;padding:4px 8px">${esc(r)} <a href="javascript:void(0)" onclick="regionRemove(${i})" style="color:#c62828;margin-left:4px;text-decoration:none">×</a></span>`
+      ).join("");
+    }
+    $("regionQueryBtn").onclick = async () => {
+      const u = $("regionQueryUser").value.trim();
+      const p = $("regionQueryPass").value;
+      if (!u || !p) { showMsg("error", "请输入账号和密码"); return; }
+      try {
+        const r = await fetch(SERVER + "/api/account-regions/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const d = await r.json();
+        if (!d.ok) { showMsg("error", d.error || "查询失败"); $("regionQueryResult").style.display = "none"; return; }
+        regionEditing = d.regions || [];
+        $("regionQueryName").textContent = u;
+        $("regionNewInput").value = "";
+        $("regionQueryResult").style.display = "block";
+        renderRegionTags();
+      } catch (e) { showMsg("error", "网络错误：" + e.message); }
+    };
+    $("regionAddBtn").onclick = () => {
+      const v = $("regionNewInput").value.trim();
+      if (!v) { showMsg("error", "请输入区名"); return; }
+      if (regionEditing.indexOf(v) >= 0) { showMsg("info", "区已存在"); return; }
+      regionEditing.push(v);
+      $("regionNewInput").value = "";
+      renderRegionTags();
+    };
+    window.regionRemove = (i) => { regionEditing.splice(i, 1); renderRegionTags(); };
+    $("regionSaveBtn").onclick = async () => {
+      const u = $("regionQueryUser").value.trim();
+      const p = $("regionQueryPass").value;
+      if (!u || !p) { showMsg("error", "请重新查询账号"); return; }
+      try {
+        const r = await fetch(SERVER + "/api/account-regions/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: u, password: p, regions: regionEditing })
+        });
+        const d = await r.json();
+        if (!d.ok) { showMsg("error", d.error || "保存失败"); return; }
+        regionEditing = d.regions || [];
+        renderRegionTags();
+        showMsg("success", "账号 " + u + " 的区已保存：" + (regionEditing.join(" / ") || "（空，执行时默认用页面配置区）"));
+      } catch (e) { showMsg("error", "网络错误：" + e.message); }
     };
 
     // 抽出来的保存函数：一键执行和"保存"按钮都调用它
@@ -856,6 +980,7 @@ K 页</label>
           renderAccounts();
           renderCdk();
           renderPageConfig();
+          refreshRegionInput();
           showMsg("success", "导入成功");
         } catch (err) { showMsg("error", "导入失败：" + err.message); }
       };
@@ -871,6 +996,7 @@ K 页</label>
       renderAccounts();
       renderCdk();
       renderPageConfig();
+      refreshRegionInput();
       syncConfigToServer();
     };
 
@@ -1112,6 +1238,7 @@ K 页</label>
       renderAccounts();
       renderCdk();
       renderPageConfig();
+      refreshRegionInput();
       loadCdksFromServer();
 
       // 3. 拉后端信息生成二维码（PC 端才有意义）

@@ -22,6 +22,7 @@ import threading
 import queue
 import socket
 import sqlite3
+import copy
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -105,6 +106,7 @@ def _init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         game_account TEXT UNIQUE NOT NULL,
         game_password TEXT NOT NULL,
+        regions TEXT DEFAULT '[]',
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS cdks (
@@ -119,29 +121,45 @@ def _init_db():
         c.execute("ALTER TABLE cdks ADD COLUMN once INTEGER DEFAULT 0")
     except Exception:
         pass
+    # 兼容旧库：补 regions 字段（区列表，JSON 数组）
+    try:
+        c.execute("ALTER TABLE accounts ADD COLUMN regions TEXT DEFAULT '[]'")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
+
+def _parse_regions(raw):
+    """解析数据库里的区列表（JSON 数组），容错返回 list"""
+    try:
+        lst = json.loads(raw) if raw else []
+        return [str(r) for r in lst] if isinstance(lst, list) else []
+    except Exception:
+        return []
 
 def db_get_accounts(include_password=False):
     """
     获取账号列表。密码在数据库中是加密存的，读取时自动解密。
     include_password=False (默认): 只返回账号名（用于前端展示/CLI 列表）
     include_password=True: 返回账号+明文密码（用于程序内部自动登录用）
+    每个账号带 regions（区列表，可能多个）。
     """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, game_account, game_password FROM accounts ORDER BY id")
+    c.execute("SELECT id, game_account, game_password, regions FROM accounts ORDER BY id")
     rows = c.fetchall()
     conn.close()
     if include_password:
-        return [{"id": r[0], "username": r[1], "password": _decrypt_password(r[2])} for r in rows]
+        return [{"id": r[0], "username": r[1], "password": _decrypt_password(r[2]), "regions": _parse_regions(r[3])} for r in rows]
     else:
-        return [{"id": r[0], "username": r[1]} for r in rows]
+        return [{"id": r[0], "username": r[1], "regions": _parse_regions(r[3])} for r in rows]
 
-def db_upsert_account(game_account, game_password):
+def db_upsert_account(game_account, game_password, regions=None):
     """按 game_account 去重：存在+密码不同→更新，存在+相同→跳过，不存在→新增
-    密码在写入前加密存储（Fernet）。"""
+    密码在写入前加密存储（Fernet）。
+    regions: 新增账号时记录的区列表（JSON 数组）。已存在账号不改动区。"""
     encrypted = _encrypt_password(game_password)
+    regs_json = json.dumps([str(r).strip() for r in (regions or []) if str(r).strip()], ensure_ascii=False) if regions else '[]'
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT game_password FROM accounts WHERE game_account = ?", (game_account,))
@@ -155,7 +173,7 @@ def db_upsert_account(game_account, game_password):
         conn.commit()
         conn.close()
         return "update"
-    c.execute("INSERT INTO accounts (game_account, game_password) VALUES (?, ?)", (game_account, encrypted))
+    c.execute("INSERT INTO accounts (game_account, game_password, regions) VALUES (?, ?, ?)", (game_account, encrypted, regs_json))
     conn.commit()
     conn.close()
     return "insert"
@@ -166,6 +184,62 @@ def db_delete_account(aid):
     c.execute("DELETE FROM accounts WHERE id = ?", (aid,))
     conn.commit()
     conn.close()
+
+def db_get_account_row(game_account):
+    """返回账号数据库行 (id, game_account, game_password, regions) 或 None"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, game_account, game_password, regions FROM accounts WHERE game_account = ?", (game_account,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def db_add_account_regions(game_account, regions):
+    """给已有账号追加区（去重）。账号不存在返回 None。返回更新后的区列表。"""
+    cleaned = [str(r).strip() for r in (regions or []) if str(r).strip()]
+    if not cleaned:
+        return None
+    row = db_get_account_row(game_account)
+    if not row:
+        return None
+    cur = _parse_regions(row[3])
+    changed = False
+    for r in cleaned:
+        if r not in cur:
+            cur.append(r)
+            changed = True
+    if changed:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("UPDATE accounts SET regions = ? WHERE game_account = ?", (json.dumps(cur, ensure_ascii=False), game_account))
+        conn.commit()
+        conn.close()
+    return cur
+
+def db_verify_account_password(game_account, plain_password):
+    """校验账号密码：解密存储的密码后比对。不存在/失败返回 False。"""
+    row = db_get_account_row(game_account)
+    if not row:
+        return False
+    stored = _decrypt_password(row[2])
+    return bool(stored) and stored == (plain_password or "")
+
+def db_set_account_regions(game_account, regions):
+    """覆盖式写入账号的区列表（去重保序）。账号不存在返回 None。"""
+    seen = []
+    for r in (regions or []):
+        r = str(r).strip()
+        if r and r not in seen:
+            seen.append(r)
+    row = db_get_account_row(game_account)
+    if not row:
+        return None
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE accounts SET regions = ? WHERE game_account = ?", (json.dumps(seen, ensure_ascii=False), game_account))
+    conn.commit()
+    conn.close()
+    return seen
 
 def db_get_cdks():
     conn = sqlite3.connect(DB_FILE)
@@ -1638,6 +1712,26 @@ def _scheduler_loop():
         time.sleep(30)
 
 
+# ---------- 区（region）执行 ----------
+# 页面配置里代表"区"的下拉框选择器（CDK 页 #server、领取页 #giftServer）。
+# 站点选择器变化时，同步改这里。
+REGION_SELECTORS = ("#server", "#giftServer")
+
+def _override_region_selects(pages_cfg, region):
+    """返回 pages 的深拷贝：把区下拉框（REGION_SELECTORS）的值替换为指定区。
+    region 为空或 pages 结构不对时原样返回。"""
+    if not region or not isinstance(pages_cfg, dict):
+        return pages_cfg
+    out = copy.deepcopy(pages_cfg)
+    for pobj in out.values():
+        if not isinstance(pobj, dict):
+            continue
+        for op in pobj.get("actions", []):
+            if isinstance(op, dict) and op.get("type") == "select" and op.get("selector") in REGION_SELECTORS:
+                op["value"] = region
+    return out
+
+
 def _run_job_impl(job_id, config, emit):
     if not playwright:
         emit("✗ Playwright 未安装，无法执行", "error")
@@ -1648,6 +1742,17 @@ def _run_job_impl(job_id, config, emit):
     cdk_list = config.get("cdkList", [])
     pages_cfg = config.get("pages", {})
     domain = config.get("domain", "")
+
+    # 展开 账号×区：一个账号有多个区（regions 列表）就跑多遍，每遍一个区；
+    # 没有区记录 → 用页面配置里的默认值（跑一遍）
+    run_units = []
+    for _acc in accounts:
+        _regs = _acc.get("regions")
+        if isinstance(_regs, list) and _regs:
+            for _r in _regs:
+                run_units.append({"account": _acc, "region": str(_r).strip()})
+        else:
+            run_units.append({"account": _acc, "region": None})
 
     # 筛选今日活跃 CDK
     active_cdks = [c for c in cdk_list if cdk_active_today(c)]
@@ -1716,23 +1821,25 @@ def _run_job_impl(job_id, config, emit):
 
                 # 根据 run_targets 计算总步骤数
                 total_steps = 0
-                if "login" in run_targets: total_steps += len(accounts)
-                if "claim" in run_targets: total_steps += len(accounts)
-                if "cdk" in run_targets: total_steps += len(accounts) * len(active_cdks)
+                if "login" in run_targets: total_steps += len(run_units)
+                if "claim" in run_targets: total_steps += len(run_units)
+                if "cdk" in run_targets: total_steps += len(run_units) * len(active_cdks)
                 done = 0
 
                 # 多轮重试：每个轮次只跑"验证码未成功"的账号，全部成功或达轮次上限才停
                 # 业务失败（"失败: 1 个"等）不算验证码失败，不会进下一轮
                 MAX_CAPTCHA_ROUNDS = 5
                 round_num = 1
-                remaining_accounts = list(accounts)  # 复制：每轮从头遍历失败的账号
+                remaining_units = list(run_units)  # 复制：每轮从头遍历失败的单元（账号×区）
 
-                while remaining_accounts and round_num <= MAX_CAPTCHA_ROUNDS:
+                while remaining_units and round_num <= MAX_CAPTCHA_ROUNDS:
                     if round_num > 1:
-                        emit(f"\n===== 第 {round_num} 轮：重试 {len(remaining_accounts)} 个验证码失败的账号 =====")
+                        emit(f"\n===== 第 {round_num} 轮：重试 {len(remaining_units)} 个验证码失败的单元 =====")
                     next_remaining = []
 
-                    for acc in remaining_accounts:
+                    for unit in remaining_units:
+                        acc = unit["account"]
+                        region = unit["region"]
                         acc_user = acc.get("username", "?")
                         # 每账号开始前重置验证码状态
                         captcha_ctx["last_result"] = None
@@ -1740,10 +1847,15 @@ def _run_job_impl(job_id, config, emit):
                         captcha_ctx["active"] = False
                         _check_pause(job_id, emit)
                         _check_cancel(job_id, emit)
-                        emit(f"\n=== 账号: {acc_user} ===")
+                        # 按区覆盖页面配置里的区下拉框；无区 → 用页面配置默认值
+                        pages_run = _override_region_selects(pages_cfg, region)
+                        if region:
+                            emit(f"\n=== 账号: {acc_user}（区: {region}）===")
+                        else:
+                            emit(f"\n=== 账号: {acc_user} ===")
 
                         if "login" in run_targets:
-                            page_obj = pages_cfg.get("login", {})
+                            page_obj = pages_run.get("login", {})
                             if not page_obj.get("actions"):
                                 emit("  (未配置登录页操作，跳过登录)", "warn")
                             else:
@@ -1770,7 +1882,7 @@ def _run_job_impl(job_id, config, emit):
                             if "login" not in run_targets:
                                 emit("  ⚠ 勾了领取页但没勾登录页，跳过领取", "warn")
                             else:
-                                page_obj = pages_cfg.get("claim", {})
+                                page_obj = pages_run.get("claim", {})
                                 if not page_obj.get("actions"):
                                     emit("  (未配置领取页操作，跳过)", "warn")
                                 else:
@@ -1800,7 +1912,7 @@ def _run_job_impl(job_id, config, emit):
                             for cdk in active_cdks:
                                 _check_pause(job_id, emit)
                                 _check_cancel(job_id, emit)
-                                page_obj = pages_cfg.get("cdk", {})
+                                page_obj = pages_run.get("cdk", {})
                                 if not page_obj.get("actions"):
                                     emit("  (未配置 CDK 页操作，跳过)", "warn")
                                     continue
@@ -1836,17 +1948,17 @@ def _run_job_impl(job_id, config, emit):
                             # 账密错：不入 next_remaining，账密也不入库（用户要求）
                         elif last == "failure":
                             acc_user = acc.get("username", "?")
-                            emit(f"  ⚠ 账号 {acc_user} 验证码失败，加入下一轮重试", "warn")
-                            next_remaining.append(acc)
+                            emit(f"  ⚠ 账号 {acc_user}（区: {region or '默认'}）验证码失败，加入下一轮重试", "warn")
+                            next_remaining.append(unit)
                     # 本轮结束：更新 remaining + round
                     if not next_remaining:
                         emit("\n✅ 所有账号验证码都已通过")
-                        remaining_accounts = []
+                        remaining_units = []
                     else:
-                        remaining_accounts = next_remaining
+                        remaining_units = next_remaining
                         round_num += 1
-                if remaining_accounts:
-                    emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_accounts)} 个账号验证码失败: {[a.get('username','?') for a in remaining_accounts]}", "warn")
+                if remaining_units:
+                    emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_units)} 个账号验证码失败: {[u['account'].get('username','?') for u in remaining_units]}", "warn")
             finally:
                 try: browser.close()
                 except: pass
@@ -2187,8 +2299,33 @@ class Handler(BaseHTTPRequestHandler):
                 gp = (body.get("password") or body.get("game_password") or "").strip()
                 if not ga or not gp:
                     return self._json(400, {"error": "账号密码不能为空"})
-                action = db_upsert_account(ga, gp)
+                regions = body.get("regions")
+                action = db_upsert_account(ga, gp, regions if isinstance(regions, list) else None)
                 self._json(200, {"ok": True, "action": action})
+            elif self.path == '/api/account-regions/query':
+                # 查询账号的区（需密码校验，防止乱改他人账号）
+                body = self._read_body()
+                ga = (body.get("username") or "").strip()
+                gp = (body.get("password") or "").strip()
+                if not ga or not gp:
+                    return self._json(400, {"error": "账号密码不能为空"})
+                if not db_verify_account_password(ga, gp):
+                    return self._json(200, {"ok": False, "error": "账号不存在或密码不对"})
+                row = db_get_account_row(ga)
+                regions = _parse_regions(row[3]) if row else []
+                self._json(200, {"ok": True, "username": ga, "regions": regions})
+            elif self.path == '/api/account-regions/update':
+                # 修改账号的区（覆盖式，需密码校验）
+                body = self._read_body()
+                ga = (body.get("username") or "").strip()
+                gp = (body.get("password") or "").strip()
+                if not ga or not gp:
+                    return self._json(400, {"error": "账号密码不能为空"})
+                if not db_verify_account_password(ga, gp):
+                    return self._json(200, {"ok": False, "error": "账号不存在或密码不对"})
+                new_regions = body.get("regions")
+                updated = db_set_account_regions(ga, new_regions if isinstance(new_regions, list) else [])
+                self._json(200, {"ok": True, "username": ga, "regions": updated or []})
             elif self.path == '/api/cdks':
                 # 添加 CDK（前端如有用到）
                 body = self._read_body()
@@ -2222,6 +2359,8 @@ class Handler(BaseHTTPRequestHandler):
                 password = (body.get("password") or "").strip()
                 if not username or not password:
                     return self._json(400, {"error": "账号密码不能为空"})
+                regions = body.get("regions")
+                req_regions = [str(r).strip() for r in regions if str(r).strip()] if isinstance(regions, list) else []
                 # 过滤可用 CDK：daily 一直是 0（可反复跑），once 用完才变 1（用过的过滤掉）
                 active_cdks = []
                 for c in db_get_cdks():
@@ -2241,6 +2380,9 @@ class Handler(BaseHTTPRequestHandler):
                     "cdkList": active_cdks,
                     "runTargets": ["login", "cdk"],
                 }
+                # 测试兑换按前端传来的区跑（覆盖页面配置里的区下拉框）
+                if req_regions:
+                    cfg["pages"] = _override_region_selects(cfg.get("pages") or {}, req_regions[0])
                 jid = uuid.uuid4().hex
                 JOBS[jid] = {
                     "status": "running", "log": [], "result": None, "started": time.time(),
@@ -2269,14 +2411,17 @@ class Handler(BaseHTTPRequestHandler):
                             with JOBS_LOCK:
                                 if job: job["saved"] = False; job["save_reason"] = "账密错"
                         else:
-                            # 没账密错：入库
+                            # 没账密错：入库 + 追加区
                             action = db_upsert_account(username, password)
+                            updated_regions = db_add_account_regions(username, req_regions) if req_regions else None
                             with JOBS_LOCK:
                                 if job:
                                     job["saved"] = True
                                     job["save_action"] = action
                                     job["save_reason"] = f"成功入库（{action}）"
-                            print(f"[test-redeem] 账密入库: {action}", flush=True)
+                                    if updated_regions is not None:
+                                        job["save_reason"] += f"，区: {'/'.join(updated_regions)}"
+                            print(f"[test-redeem] 账密入库: {action}, regions={updated_regions}", flush=True)
                     except Exception as e:
                         import traceback
                         print(f"[test-redeem] 异常: {e}", flush=True)
@@ -2476,10 +2621,11 @@ def account_cli(args):
         if not accounts:
             print("（数据库为空）")
             return 0
-        print(f"{'ID':<5} {'账号'}")
-        print("-" * 30)
+        print(f"{'ID':<5} {'账号':<24} 区")
+        print("-" * 50)
         for a in accounts:
-            print(f"{a.get('id', '?'):<5} {a['username']}")
+            regs = a.get("regions") or []
+            print(f"{a.get('id', '?'):<5} {a['username']:<24} {'/'.join(regs) if regs else '-'}")
         print(f"\n共 {len(accounts)} 个账号")
         return 0
     if cmd == "add":
