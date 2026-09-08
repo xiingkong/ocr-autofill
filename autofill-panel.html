@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>自动填表配置面板</title>
   <style>
     * { box-sizing: border-box; }
@@ -61,20 +62,36 @@
     .qr-card img { width: 110px; height: 110px; background: #fff; border: 1px solid #90caf9; padding: 4px; }
     .qr-card .qr-text { font-size: 13px; color: #1565c0; line-height: 1.7; }
     .qr-card .qr-text code { background: #fff; padding: 2px 6px; border-radius: 3px; color: #0d47a1; font-weight: bold; }
+    /* ---------- 表格横向滚动容器（手机端防挤压） ---------- */
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     @media (max-width: 768px) {
       body { padding: 10px; }
       h1 { font-size: 16px; }
       .row label { width: 100%; }
       .row input, .row select { width: 100%; }
       .toolbar { flex-direction: column; align-items: stretch; }
-      .toolbar button { width: 100%; }
+      .toolbar button { width: 100%; min-height: 38px; }
       .action { padding: 8px; }
+      .action-head { flex-wrap: wrap; gap: 6px; }
+      .insert-bar { flex-wrap: wrap; }
       #runProgress { height: 50vh; font-size: 10px; }
       .card { padding: 10px; }
       table { font-size: 12px; }
       th, td { padding: 4px 6px; }
+      .table-wrap table { min-width: 520px; }  /* 手机端表格横向滚动，不挤压列 */
       .mobile-tip { display: block; }
       .qr-card { display: none; }  /* 手机端自己看自己，不需要二维码 */
+      .tabs { overflow-x: auto; flex-wrap: nowrap; }
+      .tab { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; }
+      button { min-height: 36px; }  /* 触屏点击区 */
+      /* 内联输入行：手机端竖排全宽 */
+      .acct-add-row { flex-wrap: wrap; }
+      .acct-add-row input { flex: 1 1 100%; min-width: 0; }
+      .acct-add-row button { flex: 1 1 100%; }
+      .test-redeem-row input { flex: 1 1 100%; min-width: 0; }
+      .test-redeem-row button { flex: 1 1 100%; }
+      .run-btns { flex-wrap: wrap; }
+      .run-btns button { flex: 1 1 30%; }
     }
   </style>
 </head>
@@ -83,7 +100,7 @@
 
   <!-- 手机端提示：告诉用户这是远端控制台 -->
   <div class="mobile-tip" id="mobileTip">
-    📱 <b>你现在在手机上</b>。这个页面是<b>控制台</b>，实际执行还是在电脑上。手机只能<b>看日志、触发执行</b>，自动化任务由电脑后台完成。
+    📱 <b>你现在在手机上</b>。页面配置、账号都只保存在<b>本浏览器</b>，不会和他人互通；实际执行由后端完成，手机同样可以配置页面、添加账号、查看日志、触发执行。
   </div>
 
   <!-- PC 端：给手机扫的二维码（异步加载） -->
@@ -132,7 +149,7 @@ K 页</label>
       <span style="font-weight:normal;color:#999;font-size:12px" id="runHint"></span>
     </h2>
     <div id="runProgress" style="background:#f5f5f5;padding:8px;border-radius:3px;height:280px;overflow:auto;font-family:monospace;font-size:11px;line-height:1.6;white-space:pre-wrap"></div>
-    <div style="margin-top:8px;display:flex;gap:6px">
+    <div class="run-btns" style="margin-top:8px;display:flex;gap:6px">
       <button id="pauseBtn" onclick="togglePause()" style="background:#ff9800;color:#fff;border-color:#ff9800">⏸ 暂停</button>
       <button id="cancelBtn" onclick="cancelTask()" class="danger">⏹ 取消任务</button>
       <button id="closeRun">关闭面板</button>
@@ -142,13 +159,15 @@ K 页</label>
   <!-- 账号管理 -->
   <div class="card">
     <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（仅显示本机添加的账号，其他人的不显示）</span></h2>
-    <table id="accountTable">
-      <thead>
-        <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+    <div class="table-wrap">
+      <table id="accountTable">
+        <thead>
+          <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="acct-add-row" style="margin-top:8px;display:flex;gap:8px;align-items:center">
       <input id="newAccountUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
       <input id="newAccountPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
       <button class="primary" id="addAccount">+ 添加账号</button>
@@ -158,7 +177,7 @@ K 页</label>
   <!-- 测试兑换（临时账密，跑完入库） -->
   <div class="card">
     <h2>测试兑换 <span style="font-weight:normal;color:#999;font-size:12px">（临时账密，用后端 CDK 池跑一次，跑完自动入库）</span></h2>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div class="test-redeem-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="testUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
       <input id="testPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
       <button class="primary" id="testRedeemBtn">▶ 测试兑换</button>
@@ -186,6 +205,15 @@ K 页</label>
       <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk remove &lt;code&gt;</code> ·
       <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk reset &lt;code&gt;</code>
     </p>
+    <div class="table-wrap" style="margin-top:8px">
+      <table id="cdkTable">
+        <thead>
+          <tr><th>CDK</th><th>类型</th><th>状态</th><th>激活</th><th>操作</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="todayActive" style="display:none;margin-top:8px;font-size:13px;color:#1565c0;background:#e3f2fd;padding:6px 10px;border-radius:4px"></div>
   </div>
 
   <!-- 页面配置 -->
@@ -297,7 +325,7 @@ K 页</label>
       }, 1000);
     }
 
-    // 启动时从后端拉配置（优先用后端的，本地 localStorage 作为兜底）
+    // 首次访问（本浏览器无缓存）时从后端拉一份配置当模板；之后各浏览器只读自己的 localStorage
     async function loadConfigFromServer() {
       try {
         const r = await fetch(SERVER + "/api/config");
@@ -307,7 +335,8 @@ K 页</label>
             currentConfig = data;
             // 缺字段时补齐
             if (!currentConfig.pages) currentConfig.pages = defaultConfig().pages;
-            if (!currentConfig.accounts) currentConfig.accounts = [];
+            // 账号列表只读本浏览器（localStorage）：不采用后端共享配置里的账号
+            currentConfig.accounts = [];
             if (!currentConfig.cdkList) currentConfig.cdkList = [];
             // 启动时也补齐 pages：任何缺/坏 page 都用 defaultConfig 兜底
             const defPages = defaultConfig().pages;
@@ -327,6 +356,25 @@ K 页</label>
       try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
     }
     function saveAll(c) { localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); }
+    // ---------- 账号列表只读本浏览器（localStorage）----------
+    // 读取只认本浏览器；写入不改变原有入库逻辑，这里只是额外把账号表存一份本地作为显示来源
+    function localAccountsDom() {
+      return (currentConfig && currentConfig.domain) || "newxiadan.3f8cz.com";
+    }
+    function loadLocalAccounts() {
+      try {
+        const all = loadAll();
+        const cfg = all[localAccountsDom()] || all[Object.keys(all)[0]];
+        return (cfg && Array.isArray(cfg.accounts)) ? cfg.accounts : [];
+      } catch { return []; }
+    }
+    function persistLocalConfig() {
+      try {
+        const all = loadAll();
+        all[localAccountsDom()] = JSON.parse(JSON.stringify(currentConfig));
+        saveAll(all);
+      } catch { /* localStorage 满/被禁用，忽略 */ }
+    }
     function esc(s) { return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 
@@ -388,8 +436,8 @@ K 页</label>
         </tr>`
       ).join("");
     }
-    function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; syncConfigToServer(); }
-    function removeAccount(i) { currentConfig.accounts.splice(i, 1); renderAccounts(); syncConfigToServer(); }
+    function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; syncConfigToServer(); persistLocalConfig(); }
+    function removeAccount(i) { currentConfig.accounts.splice(i, 1); renderAccounts(); syncConfigToServer(); persistLocalConfig(); }
 
     // 渲染 CDK 表
     function renderCdk() {
@@ -657,6 +705,7 @@ K 页</label>
           else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true });
           renderAccounts();
           syncConfigToServer();
+          persistLocalConfig();  // 入库逻辑不变，额外存一份本浏览器，作为本机显示来源
           $("newAccountUser").value = "";
           $("newAccountPass").value = "";
         } else {
@@ -709,7 +758,12 @@ K 页</label>
               } else if (sd.saved === true) {
                 $("testRedeemStatus").innerHTML = '<span style="color:#2e7d32">✓ ' + (sd.save_reason || "已入库") + '</span>';
                 showMsg("success", "已入库账号：" + u);
-                loadAccountsFromServer();
+                // 后端入库逻辑不变；这里把账号也加入本浏览器列表并落 localStorage（本机显示来源）
+                const idx = currentConfig.accounts.findIndex(a => a.username === u);
+                if (idx >= 0) currentConfig.accounts[idx].password = p;
+                else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true });
+                renderAccounts();
+                persistLocalConfig();
               } else {
                 $("testRedeemStatus").textContent = "状态：" + sd.status;
               }
@@ -1031,20 +1085,27 @@ K 页</label>
 
     // 初始化
     (async function init() {
-      // 1. 优先从后端拉
-      const fromServer = await loadConfigFromServer();
-      // 2. 后端没数据就用 localStorage
-      if (!fromServer) {
-        const all = loadAll();
-        const doms = Object.keys(all);
-        if (doms.length) {
-          const target = doms.find(d => d === "newxiadan.3f8cz.com") || doms[0];
-          currentConfig = all[target];
-          if (!currentConfig.pages) currentConfig.pages = defaultConfig().pages;
-          if (!currentConfig.accounts) currentConfig.accounts = [];
-          if (!currentConfig.cdkList) currentConfig.cdkList = [];
+      // 1. 优先读本浏览器 localStorage：各浏览器配置隔离，别人的配置不显示
+      const all = loadAll();
+      const domKeys = Object.keys(all);
+      if (domKeys.length) {
+        const target = domKeys.find(d => d === "newxiadan.3f8cz.com") || domKeys[0];
+        currentConfig = all[target];
+        if (!currentConfig.pages) currentConfig.pages = defaultConfig().pages;
+        if (!currentConfig.accounts) currentConfig.accounts = [];
+        if (!currentConfig.cdkList) currentConfig.cdkList = [];
+      } else {
+        // 2. 首次访问（本浏览器无缓存）：用后端配置当一次模板，之后不再读后端
+        const fromServer = await loadConfigFromServer();
+        if (!fromServer) {
+          currentConfig = defaultConfig();  // 后端也没有 → 内置默认模板
         }
+        if (!currentConfig.accounts) currentConfig.accounts = [];
+        if (!currentConfig.cdkList) currentConfig.cdkList = [];
+        persistLocalConfig();  // 模板落地本地，下次启动只读本地
       }
+      // 3. 账号始终只读本浏览器的（localStorage）
+      currentConfig.accounts = loadLocalAccounts();
       $("domainInput").value = currentConfig.domain || "";
       $("ocrEndpoint").value = currentConfig.ocrEndpoint || DEFAULT_OCR;
       $("currentDomain").textContent = currentConfig.domain || "未设置";
