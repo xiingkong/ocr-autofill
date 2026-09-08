@@ -26,6 +26,14 @@ import copy
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# ---------- 时区：强制北京时间（容器默认 UTC，定时任务按北京时间跑） ----------
+# 比 Dockerfile ENV 更可靠：只要代码更新 + 服务重启就生效，不依赖镜像重建
+os.environ["TZ"] = "Asia/Shanghai"
+try:
+    time.tzset()  # Linux 生效；Windows 无此函数，忽略
+except Exception:
+    pass
+
 # ---------- 密码加密（Fernet，对称加密） ----------
 # 保护目标：数据库文件被单独偷走时，密码不可见
 # 不防：代码 + 数据库一起被偷（密钥在代码里）
