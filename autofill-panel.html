@@ -252,7 +252,7 @@ K 页</label>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const STORAGE_KEY = "autofill_configs_v2";
+    const STORAGE_KEY = "autofill_configs_v3";
     let pickerCallback = null;
     let currentPage = "login";
 
@@ -702,7 +702,7 @@ K 页</label>
           // 也存到本地 currentConfig（只显示本机添加的）
           const idx = currentConfig.accounts.findIndex(a => a.username === u);
           if (idx >= 0) currentConfig.accounts[idx].password = p;
-          else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true });
+          else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: "六区" });
           renderAccounts();
           syncConfigToServer();
           persistLocalConfig();  // 入库逻辑不变，额外存一份本浏览器，作为本机显示来源
@@ -761,7 +761,7 @@ K 页</label>
                 // 后端入库逻辑不变；这里把账号也加入本浏览器列表并落 localStorage（本机显示来源）
                 const idx = currentConfig.accounts.findIndex(a => a.username === u);
                 if (idx >= 0) currentConfig.accounts[idx].password = p;
-                else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true });
+                else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: "六区" });
                 renderAccounts();
                 persistLocalConfig();
               } else {
