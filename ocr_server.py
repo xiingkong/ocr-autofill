@@ -27,8 +27,9 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ---------- 时区：强制北京时间（容器默认 UTC，定时任务按北京时间跑） ----------
-# 比 Dockerfile ENV 更可靠：只要代码更新 + 服务重启就生效，不依赖镜像重建
-os.environ["TZ"] = "Asia/Shanghai"
+# 用 POSIX 格式 CST-8（固定 UTC+8）：不依赖系统的 /usr/share/zoneinfo/tzdata 文件，
+# 容器没装 tzdata 时 Asia/Shanghai 会解析失败回退 UTC，CST-8 不会
+os.environ["TZ"] = "CST-8"
 try:
     time.tzset()  # Linux 生效；Windows 无此函数，忽略
 except Exception:
