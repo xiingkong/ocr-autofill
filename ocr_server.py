@@ -204,8 +204,16 @@ def _init_db():
         monthly_start TEXT DEFAULT '',
         weekly_last TEXT DEFAULT '',
         monthly_last TEXT DEFAULT '',
+        weekly_next TEXT DEFAULT '',
+        monthly_next TEXT DEFAULT '',
         PRIMARY KEY (username, region)
     )""")
+    # 兼容旧库：补 next 列（服务器给定的下次可用时间）
+    for _col in ("weekly_next", "monthly_next"):
+        try:
+            c.execute("ALTER TABLE account_cdk_cycles ADD COLUMN %s TEXT DEFAULT ''" % _col)
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -358,13 +366,14 @@ def db_get_cdk_cycle(username, region):
     conn = _db_conn()
     try:
         c = conn.cursor()
-        c.execute("SELECT weekly_start, monthly_start, weekly_last, monthly_last FROM account_cdk_cycles WHERE username=? AND region=?",
+        c.execute("SELECT weekly_start, monthly_start, weekly_last, monthly_last, weekly_next, monthly_next FROM account_cdk_cycles WHERE username=? AND region=?",
                   (username, region or ""))
         row = c.fetchone()
         if not row:
             return {}
         return {"weekly_start": row[0] or "", "monthly_start": row[1] or "",
-                "weekly_last": row[2] or "", "monthly_last": row[3] or ""}
+                "weekly_last": row[2] or "", "monthly_last": row[3] or "",
+                "weekly_next": row[4] or "", "monthly_next": row[5] or ""}
     finally:
         conn.close()
 
@@ -376,10 +385,11 @@ def db_set_cdk_cycle(username, region, weekly_start=None, monthly_start=None):
     conn = _db_conn()
     try:
         c = conn.cursor()
-        c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last)
-                     VALUES (?,?,?,?,?,?)
-                     ON CONFLICT(username, region) DO UPDATE SET weekly_start=excluded.weekly_start, monthly_start=excluded.monthly_start""",
-                  (username, region or "", w, m, cur.get("weekly_last", ""), cur.get("monthly_last", "")))
+        c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last, weekly_next, monthly_next)
+                     VALUES (?,?,?,?,?,?,?,?)
+                     ON CONFLICT(username, region) DO UPDATE SET weekly_start=excluded.weekly_start, monthly_start=excluded.monthly_start,
+                     weekly_next='', monthly_next=''""",
+                  (username, region or "", w, m, cur.get("weekly_last", ""), cur.get("monthly_last", ""), "", ""))
         conn.commit()
         return {"weekly_start": w, "monthly_start": m}
     finally:
@@ -392,19 +402,58 @@ def db_update_cdk_cycle_last(username, region, kind):
     conn = _db_conn()
     try:
         c = conn.cursor()
-        c.execute("UPDATE account_cdk_cycles SET %s=? WHERE username=? AND region=?" % col,
+        c.execute("UPDATE account_cdk_cycles SET %s=?, %s='' WHERE username=? AND region=?" % (col, col.replace("last", "next")),
                   (today, username, region or ""))
         if c.rowcount == 0:
             cur = db_get_cdk_cycle(username, region)
-            c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last)
-                         VALUES (?,?,?,?,?,?)
-                         ON CONFLICT(username, region) DO UPDATE SET %s=excluded.%s""" % (col, col),
+            c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last, weekly_next, monthly_next)
+                         VALUES (?,?,?,?,?,?,?,?)
+                         ON CONFLICT(username, region) DO UPDATE SET %s=excluded.%s, %s=''""" % (col, col, col.replace("last", "next")),
                       (username, region or "", cur.get("weekly_start", ""), cur.get("monthly_start", ""),
-                       today if kind == "weekly" else "", today if kind == "monthly" else ""))
+                       today if kind == "weekly" else "", today if kind == "monthly" else "",
+                       "", ""))
         conn.commit()
         return today
     finally:
         conn.close()
+
+def db_set_cdk_cycle_next(username, region, kind, next_date):
+    """命中"上限"后，把服务器返回的下次可用日期写入周期状态（周/月）。"""
+    col = "weekly_next" if kind == "weekly" else "monthly_next"
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE account_cdk_cycles SET %s=? WHERE username=? AND region=?" % col,
+                  (next_date, username, region or ""))
+        if c.rowcount == 0:
+            cur = db_get_cdk_cycle(username, region)
+            c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last, weekly_next, monthly_next)
+                         VALUES (?,?,?,?,?,?,?,?)
+                         ON CONFLICT(username, region) DO UPDATE SET %s=excluded.%s""" % (col, col),
+                      (username, region or "", cur.get("weekly_start", ""), cur.get("monthly_start", ""),
+                       cur.get("weekly_last", ""), cur.get("monthly_last", ""),
+                       next_date if kind == "weekly" else cur.get("weekly_next", ""),
+                       next_date if kind == "monthly" else cur.get("monthly_next", "")))
+        conn.commit()
+        return next_date
+    finally:
+        conn.close()
+
+def _extract_next_date(text):
+    """从上限提示文字里提取下次可用日期（如「2026年09月10日刷新次数」），返回 YYYY-MM-DD；提取不到返回 None"""
+    if not text:
+        return None
+    from datetime import date
+    for rx in (_NEXT_DATE_RE_CN, _NEXT_DATE_RE_ISO):
+        m = rx.search(text)
+        if m:
+            try:
+                d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                return d.strftime("%Y-%m-%d")
+            except Exception:
+                continue
+    return None
+
 
 def db_get_cdks():
     conn = _db_conn()
@@ -1474,17 +1523,23 @@ def get_lan_ip():
         return "127.0.0.1"
 
 # 调度判断：今天是否该执行某个 CDK
-def _cycle_due(start_str, last_str, cycle_days):
+def _cycle_due(start_str, last_str, cycle_days, next_str=""):
     """周/月周期判定（要求3）：
+    - next（服务器上限返回的下次可用时间）非空 → 今天 >= next 才跑（优先于其它）
     - 起始时间为空 → 每天跑（True）
     - 距起始时间不足一个周期 → 未到首期（False）
     - 从未成功过 → 到点即跑（True）
     - 上次成功距今满一个周期 → 跑（True，含错过补跑：跑完会重算下次周期）
     - 否则（本期已跑过）→ False
     """
+    from datetime import date
+    if (next_str or "").strip():
+        try:
+            return date.today() >= date.fromisoformat((next_str or "").strip())
+        except Exception:
+            pass  # next 解析失败 → 走下面的原逻辑
     if not (start_str or "").strip():
         return True
-    from datetime import date
     try:
         s = date.fromisoformat((start_str or "").strip())
         t = date.today()
@@ -1505,9 +1560,9 @@ def _account_active_cdks(acc, region, global_active):
     cycle = db_get_cdk_cycle(username, region or "")
     if codes["daily"]:
         out.append({"code": codes["daily"], "schedule": "daily", "used": False, "account_cdk": True})
-    if codes["weekly"] and _cycle_due(cycle.get("weekly_start", ""), cycle.get("weekly_last", ""), 7):
+    if codes["weekly"] and _cycle_due(cycle.get("weekly_start", ""), cycle.get("weekly_last", ""), 7, cycle.get("weekly_next", "")):
         out.append({"code": codes["weekly"], "schedule": "weekly", "used": False, "account_cdk": True})
-    if codes["monthly"] and _cycle_due(cycle.get("monthly_start", ""), cycle.get("monthly_last", ""), 30):
+    if codes["monthly"] and _cycle_due(cycle.get("monthly_start", ""), cycle.get("monthly_last", ""), 30, cycle.get("monthly_next", "")):
         out.append({"code": codes["monthly"], "schedule": "monthly", "used": False, "account_cdk": True})
     for c in global_active:
         if c.get("schedule") == "once":
@@ -1545,8 +1600,12 @@ def cdk_active_today(cdk):
 # 抓 HTML 模态框 / 错误文字（JS 原生弹窗由 page.on("dialog") 抓）
 # 成功关键词：任一命中 → 视为成功（如"领取成功" / "领取次数已达上限"）
 _SUCCESS_KEYWORDS = ["上限", "领取成功"]
+# 上限提示里的日期格式（如「2026年09月10日刷新次数」）：中文年月日 + 常见分隔 ISO 格式
+import re as _re2
+_NEXT_DATE_RE_CN = _re2.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_NEXT_DATE_RE_ISO = _re2.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})")
 # 错误关键词：任一命中 → 视为失败
-_ERROR_KEYWORDS = ["错误", "失败", "无效", "已使用", "已兑换", "失效", "限兑", "校验码", "captcha", "incorrect"]
+_ERROR_KEYWORDS = ["错误", "失败", "无效", "已使用", "已兑换", "失效", "限兑", "校验码", "captcha", "incorrect", "不存在"]
 # 注意：成功关键词里"上限"必须在错误关键词列表中**排除**——因为含"上限"是成功
 # B. "失败: N 个" 这种格式的解析正则
 import re as _re
@@ -2313,13 +2372,25 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                         _check_cancel(job_id, emit)
                                         do_op(page, op, acc, cdk, emit)
                                     time.sleep(0.5)
-                                    # 要求3：周/月码跑完，命中成功关键词或"上限" → 记录下次周期（从今天起算）
+                                    # 要求3：周/月码跑完，命中成功关键词或"上限" → 记录下次周期
+                                    # 命中"上限"：尝试提取服务器返回的下次刷新日期（如「2026年09月10日刷新次数」）设为下次可跑时间；
+                                    # 提取不到或普通成功：按原逻辑记 last=今天（+7/+30 起算）
                                     if cdk.get("account_cdk") and cdk.get("schedule") in ("weekly", "monthly"):
                                         try:
                                             _st, _dtl = _check_page_error(page, emit)
                                             if _st == "success":
-                                                _last = db_update_cdk_cycle_last(acc.get("username", "?"), region or "", cdk["schedule"])
-                                                emit(f"  ✓ {cdk['schedule']}CDK 成功（{str(_dtl)[:40]}），下次周期从 {_last} 起算")
+                                                _d = str(_dtl or "")
+                                                if "上限" in _d:
+                                                    _nx = _extract_next_date(_d)
+                                                    if _nx:
+                                                        db_set_cdk_cycle_next(acc.get("username", "?"), region or "", cdk["schedule"], _nx)
+                                                        emit(f"  ✓ {cdk['schedule']}CDK 达上限，下次 {_nx} 再跑（已自动设置）")
+                                                    else:
+                                                        _last = db_update_cdk_cycle_last(acc.get("username", "?"), region or "", cdk["schedule"])
+                                                        emit(f"  ✓ {cdk['schedule']}CDK 达上限（未识别到日期），下次周期从 {_last} 起算")
+                                                else:
+                                                    _last = db_update_cdk_cycle_last(acc.get("username", "?"), region or "", cdk["schedule"])
+                                                    emit(f"  ✓ {cdk['schedule']}CDK 成功（{_d[:40]}），下次周期从 {_last} 起算")
                                         except Exception as _e:
                                             emit(f"  ⚠ 记录 {cdk['schedule']}CDK 周期失败: {_e}", "warn")
                                     # 标记一次性 CDK 已用
