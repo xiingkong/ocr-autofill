@@ -870,46 +870,62 @@ def refresh_captcha_image(page, image_sel, emit):
 
 def close_captcha_modal(page, emit):
     """关闭挡住验证码的错误弹窗（Bootstrap 风格 modal）
-    关键：必须走 Bootstrap 正常关闭流程（模拟点击 close button），不能直接 m.remove()
-    原因：m.remove() 跳过 Bootstrap 内部状态机，会破坏网站后续操作（人工 modal 走正常流程就没事）
-    backdrop 单独清理（不影响 Bootstrap 状态）"""
+    全部走模拟人为操作，绝不优先 remove()：
+      1) 模拟点击关闭按钮（.close / data-dismiss / 按钮文字"关闭/确定/知道了/OK"）
+      2) 没按钮 → 模拟点击弹窗背景 backdrop（真人点弹窗外区域关闭）
+      3) 再不行 → 模拟按 ESC（真人也会按 ESC 关弹窗）
+      4) 以上全无效才强制清理兜底（极罕见，打日志说明）
+    原因：remove() 跳过 Bootstrap 状态机，会破坏网站后续操作（人工操作走正常流程就没事）；
+    关闭后只清理"残留遮罩/body 锁"这类状态残留（否则 z-index:1050 僵尸遮罩会拦截后续点击）。"""
     try:
-        result = page.evaluate("""() => {
-            let clickedClose = 0;
-            // 1. 优先模拟点击 Bootstrap close button —— 走正常关闭流程，状态机正确流转
-            let closeBtn = document.querySelector(
-                '.modal.show .close, .modal.show [data-dismiss="modal"], .modal.show [data-bs-dismiss="modal"]'
-            );
-            if (!closeBtn) {
-                // 2. 选择器没匹配到 → 按按钮文字找（"确定/关闭/知道了/OK"等），照样模拟点击关闭
-                const btns = Array.from(document.querySelectorAll('.modal.show button, .modal.show .btn'));
-                closeBtn = btns.find(b => /关闭|确定|知道了|好的|确认|ok|close|cancel/i.test((b.textContent || '').trim())) || null;
-            }
-            if (closeBtn) {
-                closeBtn.click();
-                clickedClose = 1;
-            } else {
-                // 2. 没找到 close button 才用 remove 兜底（很少见）
-                document.querySelectorAll('.modal.show').forEach(m => m.remove());
-            }
-            // 3. backdrop 单独清理（不管 .show 状态）—— 残留的 z-index:1050 会拦截点击
-            let backdropCount = 0;
-            document.querySelectorAll('.modal-backdrop').forEach(m => { m.remove(); backdropCount++; });
-            // 4. body 锁
+        for _attempt in range(2):  # 最多两轮：模拟操作 → 等动画 → 未关再试
+            result = page.evaluate("""() => {
+                const steps = [];
+                const modal = document.querySelector('.modal.show, .modal.fade.show');
+                // 1) 模拟点击关闭按钮
+                let closeBtn = document.querySelector(
+                    '.modal.show .close, .modal.show [data-dismiss="modal"], .modal.show [data-bs-dismiss="modal"]'
+                );
+                if (!closeBtn) {
+                    const btns = Array.from(document.querySelectorAll('.modal.show button, .modal.show .btn'));
+                    closeBtn = btns.find(b => /关闭|确定|知道了|好的|确认|ok|close|cancel/i.test((b.textContent || '').trim())) || null;
+                }
+                if (closeBtn) { closeBtn.click(); steps.push('点击关闭按钮'); }
+                else {
+                    // 2) 模拟点击背景（真人点弹窗外区域关闭）
+                    const backdrop = document.querySelector('.modal-backdrop.show, .modal-backdrop');
+                    if (backdrop) { backdrop.click(); steps.push('点击背景关闭'); }
+                    // 3) 模拟按 ESC
+                    else if (modal) {
+                        const ev = new KeyboardEvent('keydown', {
+                            key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+                            bubbles: true, cancelable: true
+                        });
+                        modal.dispatchEvent(ev);
+                        document.dispatchEvent(ev);
+                        steps.push('按 ESC');
+                    }
+                    // 4) 兜底：真没有可模拟操作的弹窗元素
+                    else { steps.push('无弹窗元素'); }
+                }
+                return { steps, modalStill: !!document.querySelector('.modal.show, .modal.fade.show') };
+            }""")
+            if result and result.get("steps") and emit:
+                emit(f"  [弹窗] {', '.join(result['steps'])}")
+            time.sleep(0.35)  # 让 Bootstrap 完成 fade-out 动画
+            if result and not result.get("modalStill"):
+                break
+        # 弹窗已关：清理残留遮罩/body 锁（状态残留，不是关闭动作；僵尸遮罩会拦截后续点击）
+        r2 = page.evaluate("""() => {
+            let n = 0;
+            document.querySelectorAll('.modal-backdrop').forEach(m => { m.remove(); n++; });
             document.body.classList.remove('modal-open');
             document.body.style.overflow = '';
             document.body.style.paddingRight = '';
-            return { clicked: clickedClose, backdrop: backdropCount };
+            return n;
         }""")
-        if result and (result.get("clicked") or result.get("backdrop")):
-            msg = []
-            if result.get("clicked"):
-                msg.append("模拟点击 close button")
-            if result.get("backdrop"):
-                msg.append(f"清 backdrop × {result['backdrop']}")
-            if emit:
-                emit(f"  [重试] 关闭弹窗（{', '.join(msg)}）")
-            time.sleep(0.3)  # 让 Bootstrap 完成 fade-out 动画
+        if r2 and emit:
+            emit(f"  [弹窗] 清理残留遮罩 × {r2}")
     except Exception as e:
         if emit:
             emit(f"  ⚠ 关弹窗异常: {e}", "warn")
@@ -3540,6 +3556,38 @@ def stats_cli(args):
     return 0
 
 
+def config_cli(args):
+    """python3 ocr_server.py config：查看当前运行配置（OCR 模型/字符集/并发数/定时/数据目录）"""
+    print("═══ OCR 自动兑换 当前配置 ═══")
+    print(f"数据目录:  {_DATA_DIR}")
+    print(f"数据库:    {DB_FILE}")
+    # OCR 模型
+    beta = os.environ.get("OCR_BETA", "1") != "0"
+    print(f"OCR 模型:  {'新模型 common.onnx（beta=True）' if beta else '老模型 common_old.onnx（beta=False）'}")
+    # 字符集
+    _r = (os.environ.get("OCR_RANGES", "") or "").strip()
+    _names = {"0": "纯数字 0-9", "1": "小写 a-z", "2": "大写 A-Z", "3": "a-z + A-Z",
+              "4": "a-z + 0-9", "5": "A-Z + 0-9", "6": "a-z + A-Z + 0-9"}
+    if _r:
+        print(f"字符集:    {_names.get(_r, _r)}（OCR_RANGES={_r}）")
+    else:
+        print("字符集:    默认（字母数字全覆盖，未设 OCR_RANGES）")
+    # 并发
+    print(f"并发数:    {get_concurrency()}（环境变量 AUTOFILL_CONCURRENCY > cc 设置 > 默认 3）")
+    # 定时时间（读持久化配置）
+    try:
+        _sched = (LAST_CONFIG or {}).get("schedule") or {}
+        if not _sched:
+            _sched = (load_persisted_config() or {}).get("schedule") or {}
+        _t = _sched.get("time", "00:05")
+        _on = _sched.get("enabled", True)
+        print(f"定时任务:  每天 {_t}（{'启用' if _on else '停用'}，配置存于前端页面配置）")
+    except Exception:
+        pass
+    print(f"验证码统计: python3 ocr_server.py stats 查看")
+    return 0
+
+
 def concurrency_cli(args):
     """并发数子命令：cc 查看 / cc <数字> 设置（默认 3）"""
     if args and args[0] in ("help", "-h", "--help"):
@@ -3621,6 +3669,8 @@ if __name__ == '__main__':
         sys.exit(concurrency_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "stats":
         sys.exit(stats_cli(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "config":
+        sys.exit(config_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "now":
         sys.exit(run_now_cli(sys.argv[2:]))
     main()

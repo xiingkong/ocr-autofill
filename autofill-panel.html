@@ -11,11 +11,6 @@
     h2 { font-size: 15px; margin: 0 0 8px; }
     h3 { font-size: 13px; margin: 0 0 6px; color: #555; }
     .card { background: #fff; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-    .main-tabs { display: flex; gap: 4px; border-bottom: 2px solid #e0e0e0; margin-bottom: 12px; }
-    .main-tabs .mtab { padding: 8px 16px; cursor: pointer; border: 0; background: transparent; border-radius: 0; color: #666; font-size: 14px; }
-    .main-tabs .mtab:hover { color: #1976d2; }
-    .main-tabs .mtab.active { color: #1976d2; border-bottom: 2px solid #1976d2; margin-bottom: -2px; font-weight: bold; }
-    .g-hidden { display: none !important; }
     .pwd-tip { background: #fff8e1; border: 1px solid #ffe082; color: #8d6e63; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
     .pwd-tip b { color: #bf360c; }
     .saved-hint { font-size: 12px; color: #2e7d32; margin-left: 8px; }
@@ -92,8 +87,6 @@
       .mobile-tip { display: block; }
       .qr-card { display: none; }  /* 手机端自己看自己，不需要二维码 */
       .tabs { overflow-x: auto; flex-wrap: nowrap; }
-      .main-tabs { overflow-x: auto; flex-wrap: nowrap; }
-      .main-tabs .mtab { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; }
       .tab { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; }
       button { min-height: 36px; }  /* 触屏点击区 */
       /* 内联输入行：手机端竖排全宽 */
@@ -111,9 +104,6 @@
       body { background: #121418; color: #d8dde4; }
       .card { background: #1c1f26; border-color: #2e333c; box-shadow: none; }
       h3 { color: #9aa3af; }
-      .main-tabs { border-color: #2e333c; }
-      .main-tabs .mtab { color: #9aa3af; }
-      .main-tabs .mtab.active, .main-tabs .mtab:hover { color: #90caf9; border-color: #90caf9; }
       .tabs { border-color: #2e333c; }
       .tab { color: #9aa3af; }
       .tab.active { color: #90caf9; border-color: #90caf9; }
@@ -150,6 +140,77 @@
       .saved-hint { color: #81c784; }
       .empty { color: #6b7684; }
     }
+
+    /* ============================================================
+       改版 v2：运行/账号合一主界面 + 配置抽屉 + 全面美化
+       ============================================================ */
+    body { background: linear-gradient(170deg, #eef3fb 0%, #e6edf7 55%, #dfe8f4 100%); background-attachment: fixed; }
+    h1 { font-size: 21px; font-weight: 700; letter-spacing: .5px; color: #14335c; display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    h2 { font-size: 15px; }
+    .card { border-radius: 12px; border-color: #dfe6f0; box-shadow: 0 2px 10px rgba(30,60,110,.07); transition: box-shadow .2s ease; }
+    .card:hover { box-shadow: 0 4px 16px rgba(30,60,110,.10); }
+    .main-ops-card { background: linear-gradient(135deg, #ffffff, #f3f7fd); padding: 14px 16px; }
+    .region-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+    .region-field { flex: 1 1 320px; min-width: 260px; }
+    .region-field label { display: block; font-size: 13px; color: #4a6a8f; font-weight: 600; margin-bottom: 4px; }
+    .region-field input { width: 100%; font-size: 15px; padding: 9px 12px; border: 2px solid #c9d8ec; border-radius: 8px; transition: border-color .2s, box-shadow .2s; background: #fff; }
+    .region-field input:focus { outline: none; border-color: #1976d2; box-shadow: 0 0 0 3px rgba(25,118,210,.15); }
+    .region-hint { font-size: 12px; color: #8aa0ba; margin-top: 4px; }
+    .run-all-btn { padding: 10px 22px; font-size: 15px; border-radius: 8px; box-shadow: 0 3px 10px rgba(25,118,210,.30); }
+    .run-all-btn:hover { box-shadow: 0 5px 14px rgba(25,118,210,.38); }
+    .run-opts { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #d5e0ee; font-size: 13px; }
+    .run-opts label { cursor: pointer; color: #42597a; user-select: none; }
+    .opts-label { color: #8aa0ba; }
+    .opts-sep { color: #c3d0e0; }
+    .run-opts button { border-radius: 6px; }
+    /* 配置抽屉 */
+    .cfg-mask { position: fixed; inset: 0; background: rgba(18,28,48,.45); opacity: 0; pointer-events: none; transition: opacity .25s ease; z-index: 900; }
+    .cfg-mask.on { opacity: 1; pointer-events: auto; }
+    .cfg-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(470px, 94vw); background: #f4f7fb; box-shadow: -10px 0 36px rgba(15,30,60,.20); transform: translateX(106%); transition: transform .30s cubic-bezier(.22,.9,.36,1); z-index: 910; overflow-y: auto; padding: 14px; box-sizing: border-box; }
+    .cfg-drawer.on { transform: translateX(0); }
+    .cfg-drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding: 2px 2px 8px; border-bottom: 2px solid #d5e0ee; }
+    .cfg-drawer-head b { font-size: 16px; color: #14335c; }
+    .cfg-close { width: 32px; height: 32px; border-radius: 50%; border: 0; background: #e3eaf4; color: #4a6a8f; font-size: 15px; cursor: pointer; line-height: 1; }
+    .cfg-close:hover { background: #d3deec; }
+    .cfg-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+    .cfg-btns button { border-radius: 6px; }
+    #cfgFab { position: fixed; right: 20px; bottom: 20px; z-index: 920; width: 54px; height: 54px; border-radius: 50%; border: 0; background: linear-gradient(135deg, #1976d2, #42a5f5); color: #fff; font-size: 22px; box-shadow: 0 5px 18px rgba(25,118,210,.42); cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
+    #cfgFab:hover { transform: scale(1.08); box-shadow: 0 7px 22px rgba(25,118,210,.50); }
+    /* 表格 / 按钮细节美化 */
+    table { border-radius: 8px; overflow: hidden; }
+    th { background: #eef3fa; color: #2f4b70; }
+    tbody tr:hover td { background: #f2f7fd; }
+    button { border-radius: 6px; }
+    /* 响应式：抽屉全宽 + 主操作卡竖排 */
+    @media (max-width: 768px) {
+      #cfgFab { width: 48px; height: 48px; right: 14px; bottom: 14px; font-size: 20px; }
+      .cfg-drawer { width: 100vw; }
+      .region-row { flex-direction: column; align-items: stretch; }
+      .region-field { flex: 1 1 auto; min-width: 0; }
+      .run-all-btn { width: 100%; }
+    }
+    /* 深色模式适配（新组件） */
+    @media (prefers-color-scheme: dark) {
+      body { background: linear-gradient(170deg, #10131a 0%, #141922 60%, #161c26 100%); background-attachment: fixed; }
+      h1 { color: #b6c8e2; }
+      .main-ops-card { background: linear-gradient(135deg, #1c1f26, #18202c); }
+      .region-field label { color: #9aa8bd; }
+      .region-field input { background: #262b33; color: #d8dde4; border-color: #3a4150; }
+      .region-field input:focus { border-color: #42a5f5; box-shadow: 0 0 0 3px rgba(66,165,245,.18); }
+      .region-hint { color: #6b7684; }
+      .run-opts { border-top-color: #2e333c; }
+      .run-opts label { color: #9aa3af; }
+      .opts-label { color: #6b7684; }
+      .opts-sep { color: #3a4150; }
+      .cfg-drawer { background: #14181f; box-shadow: -10px 0 36px rgba(0,0,0,.5); }
+      .cfg-drawer-head { border-bottom-color: #2e333c; }
+      .cfg-drawer-head b { color: #b6c8e2; }
+      .cfg-close { background: #262b33; color: #9aa3af; }
+      .cfg-close:hover { background: #333a46; }
+      th { background: #262b33; color: #b6c8e2; }
+      tbody tr:hover td { background: #21252d; }
+    }
+
   </style>
 </head>
 <body>
@@ -158,67 +219,34 @@
   <!-- 明文密码提示：本浏览器开发者工具可读，不会被其他人看到 -->
   <div class="pwd-tip" id="pwdTip">🔒 本浏览器保存的<b>账号/密码是明文</b>：本浏览器的<b>开发者工具（F12）可读</b>，不会被其他人看到（各浏览器互不互通）。</div>
 
-  <!-- 主功能分组导航（要求5） -->
-  <div class="main-tabs" id="mainTabs">
-    <button class="mtab active" data-g="run">🚀 运行</button>
-    <button class="mtab" data-g="acct">👤 账号</button>
-    <button class="mtab" data-g="cdk">🎫 CDK</button>
-    <button class="mtab" data-g="cfg">⚙️ 配置</button>
-  </div>
-
   <!-- 手机端提示：告诉用户这是远端控制台 -->
   <div class="mobile-tip" id="mobileTip">
     📱 <b>你现在在手机上</b>。页面配置、账号都只保存在<b>本浏览器</b>，不会和他人互通；实际执行由后端完成，手机同样可以配置页面、添加账号、查看日志、触发执行。
   </div>
 
-  <!-- PC 端：给手机扫的二维码（异步加载） -->
-  <div class="qr-card" id="qrCard" style="display:none">
-    <img id="qrImg" alt="二维码">
-    <div class="qr-text">
-      📱 <b>手机扫码加入控制台</b><br>
-      手机连同一 WiFi，浏览器打开：<br>
-      <code id="qrUrl">--</code>
+  <!-- 主操作卡：只保留选区 + 一键执行（配置收进右下角 ⚙️ 抽屉，防误动） -->
+  <div class="card main-ops-card">
+    <div class="region-row">
+      <div class="region-field">
+        <label for="currentRegion">当前区</label>
+        <input id="currentRegion" placeholder="输入汉字几区，如：六区">
+        <div class="region-hint">输入汉字几区（如：六区），同步到 CDK 页和领取页的区下拉框</div>
+      </div>
+      <button id="runAll" class="primary run-all-btn">🚀 一键执行全部</button>
     </div>
-  </div>
-
-  <div class="card grouped" data-group="run">
-    <div class="domain-tag">当前域名：<code id="currentDomain">未选择</code></div>
-    <div class="row" style="margin-top:8px">
-      <label>域名</label>
-      <input id="domainInput" placeholder="newxiadan.3f8cz.com">
+    <div class="run-opts">
+      <span class="opts-label">执行:</span>
+      <label><input type="checkbox" id="runLogin" checked>登录页</label>
+      <label><input type="checkbox" id="runClaim" checked>登录后领取页</label>
+      <label><input type="checkbox" id="runCdk" checked>CDK 页</label>
+      <span class="opts-sep">|</span>
+      <button id="save">保存</button>
+      <span id="savedHint" class="saved-hint"></span>
     </div>
-    <div class="row">
-      <label>ddddocr</label>
-      <input id="ocrEndpoint" placeholder="http://127.0.0.1:7777/ocr">
-    </div>
-  </div>
-
-  <div class="row grouped" data-group="run" style="margin-bottom:10px">
-    <label>当前区</label>
-    <input id="currentRegion" placeholder="输入汉字几区，如：六区" style="flex:0 1 240px;min-width:120px">
-    <span style="color:#999;font-size:12px">输入汉字几区（如：六区），同步到 CDK 页和领取页的区下拉框</span>
-  </div>
-
-  <div class="toolbar grouped" data-group="run">
-    <button id="runAll" style="background:#1976d2;color:#fff;border:0;padding:8px 20px;font-size:14px;font-weight:bold;border-radius:3px;cursor:pointer">🚀 一键执行全部</button>
-    <span style="color:#999;font-size:12px;margin:0 8px">执行:</span>
-    <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runLogin" checked>
-登录页</label>
-    <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runClaim" checked> 登
-录后领取页</label>
-    <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runCdk" checked> CD
-K 页</label>
-    <span style="color:#999;font-size:12px;margin:0 8px">|</span>
-    <button id="save">保存</button>
-    <button id="testOcr">测试 OCR</button>
-    <button id="export">导出 JSON</button>
-    <button id="import">导入 JSON</button>
-    <button id="clear">清空</button>
-    <span id="savedHint" class="saved-hint"></span>
   </div>
 
   <!-- 一键执行进度面板 -->
-  <div class="card grouped" id="runPanel" data-group="run" style="display:none">
+  <div class="card" id="runPanel" style="display:none">
     <h2>
       <span id="runTitle">🚀 执行中</span>
       <span style="font-weight:normal;color:#999;font-size:12px" id="runHint"></span>
@@ -238,7 +266,7 @@ K 页</label>
   </div>
 
   <!-- 账号管理 -->
-  <div class="card grouped" data-group="acct">
+  <div class="card">
     <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（仅显示本机添加的账号，其他人的不显示）</span></h2>
     <div class="table-wrap">
       <div style="margin-bottom:6px">
@@ -267,7 +295,7 @@ K 页</label>
   </div>
 
   <!-- 测试兑换（临时账密，跑完入库） -->
-  <div class="card grouped" data-group="acct">
+  <div class="card">
     <h2>测试兑换 <span style="font-weight:normal;color:#999;font-size:12px">（临时账密，用后端 CDK 池跑一次，跑完自动入库）</span></h2>
     <div class="test-redeem-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="testUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
@@ -284,7 +312,7 @@ K 页</label>
   </div>
 
   <!-- 账号区查询/修改（要求2：密码校验后查看/修改账号的区） -->
-  <div class="card grouped" data-group="acct">
+  <div class="card">
     <h2>账号区查询/修改 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码验证，可查看/修改该账号的区）</span></h2>
     <div class="row">
       <label>账号</label>
@@ -307,7 +335,7 @@ K 页</label>
   </div>
 
   <!-- CDK 周期设置（要求3：每账号日/周/月码 + 周月起始时间，按区独立） -->
-  <div class="card grouped" data-group="acct">
+  <div class="card">
     <h2>CDK 周期设置 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码+区，可查看/修改该账号的日/周/月 CDK 与周期起始时间）</span></h2>
     <div class="row">
       <label>账号</label>
@@ -340,61 +368,102 @@ K 页</label>
     </div>
   </div>
 
-  <!-- CDK 管理（后端） -->
-  <div class="card grouped" data-group="cdk">
-    <h2>CDK 池（后端管理）</h2>
-    <p style="font-size:12px;color:#666;margin:0">
-      CDK 由后端管理，不在面板添加。
-      <br>终端命令：
-      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-daily &lt;code1&gt; [code2 ...]</code>
-      <br>一次性 CDK（跑完一轮自动删）：
-      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-once &lt;code&gt;</code>
-      <br>查看/删除/重置：
-      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk list</code> ·
-      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk remove &lt;code&gt;</code> ·
-      <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk reset &lt;code&gt;</code>
-    </p>
-    <div class="table-wrap" style="margin-top:8px">
-      <table id="cdkTable">
-        <thead>
-          <tr><th>CDK</th><th>类型</th><th>状态</th><th>激活</th><th>操作</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+
+
+  <!-- 配置抽屉：右下角 ⚙️ 打开（配置收角落，防误动） -->
+  <button id="cfgFab" title="打开配置">⚙️</button>
+  <div id="cfgMask" class="cfg-mask"></div>
+  <aside id="cfgDrawer" class="cfg-drawer" aria-label="配置">
+    <div class="cfg-drawer-head">
+      <b>⚙️ 配置</b>
+      <button id="cfgClose" class="cfg-close" title="关闭">✕</button>
     </div>
-    <div id="todayActive" style="display:none;margin-top:8px;font-size:13px;color:#1565c0;background:#e3f2fd;padding:6px 10px;border-radius:4px"></div>
-  </div>
-
-  <!-- 页面配置 -->
-  <div class="card grouped" data-group="cfg">
-    <h2>页面配置</h2>
-    <div class="tabs">
-      <button class="tab active" data-page="login">登录页 (/player/login)</button>
-      <button class="tab" data-page="cdk">CDK 页 (/index/cdk)</button>
-      <button class="tab" data-page="claim">登录后领取 (/player/index)</button>
+    <div class="cfg-drawer-body">
+      <!-- 数据管理 -->
+      <div class="card">
+        <h2>数据管理</h2>
+        <div class="cfg-btns">
+          <button id="testOcr">测试 OCR</button>
+          <button id="export">导出 JSON</button>
+          <button id="import">导入 JSON</button>
+          <button id="clear">清空</button>
+        </div>
+      </div>
+      <!-- 域名 / OCR 端点 -->
+      <div class="card">
+        <div class="domain-tag">当前域名：<code id="currentDomain">未选择</code></div>
+        <div class="row" style="margin-top:8px">
+          <label>域名</label>
+          <input id="domainInput" placeholder="newxiadan.3f8cz.com">
+        </div>
+        <div class="row">
+          <label>ddddocr</label>
+          <input id="ocrEndpoint" placeholder="http://127.0.0.1:7777/ocr">
+        </div>
+      </div>
+      <!-- 页面配置 -->
+      <div class="card">
+        <h2>页面配置</h2>
+        <div class="tabs">
+          <button class="tab active" data-page="login">登录页 (/player/login)</button>
+          <button class="tab" data-page="cdk">CDK 页 (/index/cdk)</button>
+          <button class="tab" data-page="claim">登录后领取 (/player/index)</button>
+        </div>
+        <div id="pageConfig"></div>
+      </div>
+      <!-- HTML 转选择器 -->
+      <div class="card">
+        <h2>HTML 转选择器 <span style="font-weight:normal;color:#999;font-size:12px">（F12 → 选元素 → 右键 → Copy → Copy outerHTML → 粘贴到此）</span></h2>
+        <textarea id="htmlInput" placeholder="粘贴 HTML 片段，自动解析" style="width:100%;min-height:50px;padding:6px;border:1px solid #ddd;border-radius:3px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
+        <div id="htmlResult" style="margin-top:8px;display:none"></div>
+      </div>
+      <!-- 答案占位符 -->
+      <div class="card">
+        <h2>答案占位符</h2>
+        <p style="font-size:13px;margin:0">
+          在"答案"里可以用：
+          <code class="inline">{username}</code> 当前账号 ·
+          <code class="inline">{password}</code> 当前密码 ·
+          <code class="inline">{cdk}</code> 当前 CDK ·
+          <code class="inline">{date}</code> 今天 YYYY-MM-DD ·
+          <code class="inline">{time}</code> 当前时间 HH:MM:SS
+        </p>
+      </div>
+      <!-- CDK 池（后端管理） -->
+      <div class="card">
+        <h2>CDK 池（后端管理）</h2>
+        <p style="font-size:12px;color:#666;margin:0">
+          CDK 由后端管理，不在面板添加。
+          <br>终端命令：
+          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-daily &lt;code1&gt; [code2 ...]</code>
+          <br>一次性 CDK（跑完一轮自动删）：
+          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-once &lt;code&gt;</code>
+          <br>查看/删除/重置：
+          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk list</code> ·
+          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk remove &lt;code&gt;</code> ·
+          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk reset &lt;code&gt;</code>
+        </p>
+        <div class="table-wrap" style="margin-top:8px">
+          <table id="cdkTable">
+            <thead>
+              <tr><th>CDK</th><th>类型</th><th>状态</th><th>激活</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="todayActive" style="display:none;margin-top:8px;font-size:13px;color:#1565c0;background:#e3f2fd;padding:6px 10px;border-radius:4px"></div>
+      </div>
+      <!-- 手机扫码（PC 端才有意义） -->
+      <div class="qr-card" id="qrCard" style="display:none">
+        <img id="qrImg" alt="二维码">
+        <div class="qr-text">
+          📱 <b>手机扫码加入控制台</b><br>
+          手机连同一 WiFi，浏览器打开：<br>
+          <code id="qrUrl">--</code>
+        </div>
+      </div>
     </div>
-    <div id="pageConfig"></div>
-  </div>
-
-  <!-- HTML 转选择器 -->
-  <div class="card grouped" data-group="cfg">
-    <h2>HTML 转选择器 <span style="font-weight:normal;color:#999;font-size:12px">（F12 → 选元素 → 右键 → Copy → Copy outerHTML → 粘贴到此）</span></h2>
-    <textarea id="htmlInput" placeholder="粘贴 HTML 片段，自动解析" style="width:100%;min-height:50px;padding:6px;border:1px solid #ddd;border-radius:3px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
-    <div id="htmlResult" style="margin-top:8px;display:none"></div>
-  </div>
-
-  <!-- 占位符说明 -->
-  <div class="card grouped" data-group="cfg">
-    <h2>答案占位符</h2>
-    <p style="font-size:13px;margin:0">
-      在"答案"里可以用：
-      <code class="inline">{username}</code> 当前账号 ·
-      <code class="inline">{password}</code> 当前密码 ·
-      <code class="inline">{cdk}</code> 当前 CDK ·
-      <code class="inline">{date}</code> 今天 YYYY-MM-DD ·
-      <code class="inline">{time}</code> 当前时间 HH:MM:SS
-    </p>
-  </div>
+  </aside>
 
   <div id="msg" class="msg"></div>
   <input type="file" id="importFile" accept=".json" style="display:none">
@@ -404,14 +473,21 @@ K 页</label>
     const STORAGE_KEY = "autofill_configs_v3";
     const REGION_MEMORY_KEY = "ocr_current_region_v1";
 
-    // ---------- 主功能分组导航（要求5） ----------
-    function switchGroup(g) {
-      document.querySelectorAll("#mainTabs .mtab").forEach(t => t.classList.toggle("active", t.dataset.g === g));
-      document.querySelectorAll("[data-group]").forEach(el => el.classList.toggle("g-hidden", el.dataset.group !== g));
+    // ---------- 配置抽屉（右下角 ⚙️，收角落防误动） ----------
+    function openCfg() {
+      const d = $("cfgDrawer"), m = $("cfgMask");
+      if (d) d.classList.add("on");
+      if (m) m.classList.add("on");
     }
-    document.querySelectorAll("#mainTabs .mtab").forEach(t => {
-      t.onclick = () => switchGroup(t.dataset.g);
-    });
+    function closeCfg() {
+      const d = $("cfgDrawer"), m = $("cfgMask");
+      if (d) d.classList.remove("on");
+      if (m) m.classList.remove("on");
+    }
+    if ($("cfgFab")) $("cfgFab").onclick = openCfg;
+    if ($("cfgClose")) $("cfgClose").onclick = closeCfg;
+    if ($("cfgMask")) $("cfgMask").onclick = closeCfg;
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCfg(); });
     let pickerCallback = null;
     let currentPage = "login";
 
