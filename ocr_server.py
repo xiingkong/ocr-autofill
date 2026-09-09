@@ -601,7 +601,7 @@ ocr = None
 try:
     import ddddocr
     # beta=True 启用新模型；可用环境变量 OCR_BETA=0 切回默认模型对比效果（改后 ocr-restart 生效）
-    ocr = ddddocr.DdddOcr(show_ad=False, beta=os.environ.get("OCR_BETA", "1") != "0")
+    ocr = ddddocr.DdddOcr(show_ad=False, beta=os.environ.get("OCR_BETA", "0") != "0")  # 默认老模型；显式 OCR_BETA=1 切新模型
     # 可选限定字符集：OCR_RANGES=0(纯数字)/1(小写)/2(大写)/5(大写+数字)/6(字母+数字) 或自定义字符串
     # 你的验证码是字母数字 4-5 位，默认字符集已覆盖，可不用设置；需要时再配
     try:
@@ -3690,7 +3690,7 @@ def config_cli(args):
     print(f"数据目录:  {_DATA_DIR}")
     print(f"数据库:    {DB_FILE}")
     # OCR 模型
-    beta = os.environ.get("OCR_BETA", "1") != "0"
+    beta = os.environ.get("OCR_BETA", "0") != "0"
     print(f"OCR 模型:  {'新模型 common.onnx（beta=True）' if beta else '老模型 common_old.onnx（beta=False）'}")
     # 字符集
     _r = (os.environ.get("OCR_RANGES", "") or "").strip()
@@ -3700,6 +3700,8 @@ def config_cli(args):
         print(f"字符集:    {_names.get(_r, _r)}（OCR_RANGES={_r}）")
     else:
         print("字符集:    默认（字母数字全覆盖，未设 OCR_RANGES）")
+    # 预处理（固定开启：四路识别 + 4-5 位长度校验 + 一致性投票）
+    print("预处理:    原图 + 灰度 + 二值化 + 去噪（四路识别 + 4-5 位长度校验 + 一致性投票）")
     # 并发
     print(f"并发数:    {get_concurrency()}（环境变量 AUTOFILL_CONCURRENCY > cc 设置 > 默认 3）")
     # 定时时间（读持久化配置）
