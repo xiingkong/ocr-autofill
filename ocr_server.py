@@ -2229,6 +2229,8 @@ def _build_scheduled_config():
     cfg = json.loads(json.dumps(LAST_CONFIG)) if LAST_CONFIG else load_persisted_config()
     cfg = dict(cfg or {})
     cfg.pop("schedule", None)  # 调度信息不传给执行逻辑
+    # 定时/now = 全部自动化：强制登录+领取+CDK 全跑，不受前端最近一次勾选影响
+    cfg["runTargets"] = ["login", "claim", "cdk"]
     cfg["accounts"] = db_get_accounts(include_password=True)
     # 要求3：定时任务/now 用账号级日/周/月码（每账号各自生成），全局 CDK 池只取一次性（once）；
     # 全局 daily 池由账号级日/周/月码体系接管，不再在定时任务里使用
@@ -2414,6 +2416,7 @@ def _run_job_impl(job_id, config, emit):
         "runTargets": run_targets,
         "browserType": config.get("browserType"),
         "headless": config.get("headless", True),
+        "accountCdks": bool(config.get("accountCdks")),   # 修复：账号级日/周/月码模式必须传给 worker，否则定时/now 的 CDK 池只剩 once，一空就一个都不跑
     }
 
     errors = []
