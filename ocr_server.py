@@ -739,27 +739,32 @@ def preprocess_denoise(img_bytes, scale=2):
     except Exception:
         return None
 
-# 验证码识别统计：线程本地（每个任务线程一份，并发互不干扰）
-_tls = threading.local()
+# 验证码识别统计：共享计数（任务内所有 worker 线程合计；任务开始 _reset_ocr_stats，结束 _finalize_ocr_stats）
+_ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "method_hits": {}}
+_ocr_stats_lock = threading.Lock()
+
+def _reset_ocr_stats():
+    global _ocr_stats
+    with _ocr_stats_lock:
+        _ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "method_hits": {}}
 
 def _stats_bump(key, n=1):
-    st = getattr(_tls, "ocr_stats", None)
-    if st:
-        st[key] = st.get(key, 0) + n
+    with _ocr_stats_lock:
+        _ocr_stats[key] = _ocr_stats.get(key, 0) + n
 
 def _stats_method(method_name):
     """记录最终被采用的方法命中数（去掉"×N"投票后缀，记基础方法名）"""
-    st = getattr(_tls, "ocr_stats", None)
-    if st:
-        st.setdefault("method_hits", {})
+    with _ocr_stats_lock:
         base = method_name.split("×")[0]
-        st["method_hits"][base] = st["method_hits"].get(base, 0) + 1
+        _ocr_stats.setdefault("method_hits", {})
+        _ocr_stats["method_hits"][base] = _ocr_stats["method_hits"].get(base, 0) + 1
 
 def _finalize_ocr_stats(emit):
     """任务结束时汇总验证码识别统计：emit 汇总行 + 落盘（最近一次 + 历史追加，断联也能查）"""
-    st = getattr(_tls, "ocr_stats", None)
-    if not st:
-        return
+    with _ocr_stats_lock:
+        st = dict(_ocr_stats)
+    if not st.get("total"):
+        return   # 一轮都没识别到验证码 → 不写空统计文件
     total = st.get("total", 0) or 0
     ok = st.get("ok", 0) or 0
     stats = {
@@ -2203,7 +2208,7 @@ def run_job(job_id, config):
             job["cond"].notify_all()
 
     def th():
-        _tls.ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "method_hits": {}}
+        _reset_ocr_stats()
         try:
             _run_job_impl(job_id, config, emit)
             _finalize_ocr_stats(emit)
@@ -2295,9 +2300,13 @@ def _scheduler_loop():
                                 _job_log_append(jid, msg, level)
                                 with job["cond"]:
                                     job["cond"].notify_all()
+                            _reset_ocr_stats()
                             _run_job_impl(jid, cfg_to_run, _emit)
+                            _finalize_ocr_stats(_emit)
                         except Exception as e:
                             import traceback
+                            try: _finalize_ocr_stats(_emit)
+                            except Exception: pass
                             print(f"[scheduler] 任务异常: {e}", flush=True)
                             print(traceback.format_exc(), flush=True)
                             JOBS[jid]["status"] = "error"
@@ -2471,6 +2480,37 @@ def _run_job_impl(job_id, config, emit):
 
 
 def _run_job_impl_serial(job_id, config, emit, quiet=False):
+    # ---- 卡死看门狗：每个账号单元 N 秒无日志视为卡死（默认 180s，可用环境变量 ACCOUNT_STALL_TIMEOUT 调），
+    #       watchdog close 当前页打断卡住的 Playwright 调用，重开页面 + 进下一轮 ----
+    ACCOUNT_STALL_TIMEOUT = int(os.environ.get("ACCOUNT_STALL_TIMEOUT", "180") or "180")
+    _stall = {"ts": time.time(), "killed": False, "timed_out": False, "lock": threading.Lock()}
+    _orig_emit = emit
+    def emit(msg, level="info"):
+        with _stall["lock"]:
+            _stall["ts"] = time.time()
+        _orig_emit(msg, level)
+
+    def _start_stall_watchdog(page_ref):
+        """每账号单元一个 daemon 线程：N 秒无日志 → close 当前 page，让卡死的调用抛异常"""
+        _stall["killed"] = False
+        _stall["timed_out"] = False
+        with _stall["lock"]:
+            _stall["ts"] = time.time()
+        def _wd():
+            time.sleep(ACCOUNT_STALL_TIMEOUT)
+            with _stall["lock"]:
+                if _stall["killed"]:
+                    return
+                _stall["timed_out"] = True
+                _stall["killed"] = True
+            try:
+                page_ref[0].close()
+            except Exception:
+                pass
+        t = threading.Thread(target=_wd, daemon=True)
+        t.start()
+        return t
+
     if not playwright:
         emit("✗ Playwright 未安装，无法执行", "error")
         JOBS[job_id]["status"] = "error"
@@ -2530,11 +2570,6 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
         with sync_playwright() as p:
             browser = p.chromium.launch(**launch_kwargs)
             try:
-                context = browser.new_context(
-                    viewport={"width": 1280, "height": 800},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
                 # 阻断第三方 analytics 脚本（devbox 数据中心 IP 容易被这些 CDN 限速，
                 # 它们又是同步 script，会拖慢 DCL + 后续 click 等元素；阻断对业务无副作用）
                 def _route(route):
@@ -2549,9 +2584,6 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         route.abort()
                     else:
                         route.continue_()
-                page.route("**/*", _route)
-                # 反爬：隐藏 webdriver
-                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
                 # 监听 JS 弹窗：emit 日志后自动 accept，避免卡住任务
                 def _on_dialog(dialog):
                     try:
@@ -2560,7 +2592,18 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         pass
                     try: dialog.accept()
                     except Exception: pass
-                page.on("dialog", _on_dialog)
+                def _make_page(browser):
+                    _ctx = browser.new_context(
+                        viewport={"width": 1280, "height": 800},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
+                    _pg = _ctx.new_page()
+                    _pg.route("**/*", _route)
+                    # 反爬：隐藏 webdriver
+                    _pg.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+                    _pg.on("dialog", _on_dialog)
+                    return _pg
+                page = _make_page(browser)
 
                 # 根据 run_targets 计算总步骤数
                 total_steps = 0
@@ -2597,6 +2640,9 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         captcha_ctx["active"] = False
                         _check_pause(job_id, emit)
                         _check_cancel(job_id, emit)
+                        # 卡死看门狗：本单元开始计时，N 秒无日志 → watchdog 关页打断
+                        _page_ref = [page]
+                        _start_stall_watchdog(_page_ref)
                         # 按区覆盖页面配置里的区下拉框；无区 → 用页面配置默认值
                         pages_run = _override_region_selects(pages_cfg, region)
                         if region:
@@ -2624,6 +2670,18 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                 except Exception as e:
                                     emit(f"  ✗ 登录失败: {e}", "error")
                                     captcha_ctx["last_result"] = "failure"  # 异常也算失败，加入下一轮
+                                    # 卡死看门狗：登录卡死 → 重开页面 + 进下一轮
+                                    with _stall["lock"]:
+                                        _stall["killed"] = True
+                                        _timed_out = _stall.get("timed_out", False)
+                                    if _timed_out:
+                                        _stall["timed_out"] = False
+                                        emit(f"  ⚠ 账号 {acc_user}（区: {region or '默认'}）登录卡死，已重开页面，下轮重试", "warn")
+                                        try: page.close()
+                                        except Exception: pass
+                                        page = _make_page(browser)
+                                        _page_ref[0] = page
+                                        next_remaining.append(unit)
                                     continue
                                 done += 1
 
@@ -2729,6 +2787,19 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                     # 跟 login 一致：异常也算失败，加入下一轮重试
                                     captcha_ctx["last_result"] = "failure"
                                 done += 1
+                        # 卡死看门狗：本单元结束，停 watchdog；若因超时触发 → 重开页面 + 进下一轮
+                        with _stall["lock"]:
+                            _stall["killed"] = True
+                            _timed_out = _stall.get("timed_out", False)
+                        if _timed_out:
+                            _stall["timed_out"] = False
+                            emit(f"  ⚠ 账号 {acc_user}（区: {region or '默认'}）{ACCOUNT_STALL_TIMEOUT}s 无日志，视为卡死，已重开页面，下轮重试", "warn")
+                            try: page.close()
+                            except Exception: pass
+                            page = _make_page(browser)
+                            _page_ref[0] = page
+                            next_remaining.append(unit)
+                            continue
                         # 账号处理完一轮：检查结果分类
                         # - "wrong_pwd" → 账密错，不入库，不进下一轮
                         # - "failure"    → 验证码失败，进下一轮重试
@@ -3695,7 +3766,9 @@ def run_now_cli(args):
             JOBS[jid]["cond"].notify_all()
     print("⏰ 手动执行定时任务（同凌晨 00:05 的全部自动化）", flush=True)
     try:
+        _reset_ocr_stats()
         _run_job_impl(jid, cfg, _emit)
+        _finalize_ocr_stats(_emit)
         with JOBS_LOCK:
             job = JOBS.get(jid)
             if job and job.get("status") == "running":
@@ -3703,6 +3776,8 @@ def run_now_cli(args):
         return 0
     except Exception as e:
         import traceback
+        try: _finalize_ocr_stats(_emit)
+        except Exception: pass
         print(f"✗ 执行异常: {e}", flush=True)
         print(traceback.format_exc(), flush=True)
         with JOBS_LOCK:
