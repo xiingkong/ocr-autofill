@@ -10,7 +10,17 @@
     h1 { font-size: 18px; margin: 0 0 12px; }
     h2 { font-size: 15px; margin: 0 0 8px; }
     h3 { font-size: 13px; margin: 0 0 6px; color: #555; }
-    .card { background: #fff; padding: 12px; border-radius: 4px; margin-bottom: 12px; border: 1px solid #e0e0e0; }
+    .card { background: #fff; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .main-tabs { display: flex; gap: 4px; border-bottom: 2px solid #e0e0e0; margin-bottom: 12px; }
+    .main-tabs .mtab { padding: 8px 16px; cursor: pointer; border: 0; background: transparent; border-radius: 0; color: #666; font-size: 14px; }
+    .main-tabs .mtab:hover { color: #1976d2; }
+    .main-tabs .mtab.active { color: #1976d2; border-bottom: 2px solid #1976d2; margin-bottom: -2px; font-weight: bold; }
+    .g-hidden { display: none !important; }
+    .pwd-tip { background: #fff8e1; border: 1px solid #ffe082; color: #8d6e63; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
+    .pwd-tip b { color: #bf360c; }
+    .saved-hint { font-size: 12px; color: #2e7d32; margin-left: 8px; }
+    tbody tr:nth-child(odd) td { background: #fafbfc; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
     .domain-tag { background: #e3f2fd; padding: 6px 12px; border-radius: 4px; font-size: 13px; display: inline-block; margin-bottom: 8px; }
     .domain-tag code { color: #1976d2; font-weight: bold; }
     .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
@@ -82,6 +92,8 @@
       .mobile-tip { display: block; }
       .qr-card { display: none; }  /* 手机端自己看自己，不需要二维码 */
       .tabs { overflow-x: auto; flex-wrap: nowrap; }
+      .main-tabs { overflow-x: auto; flex-wrap: nowrap; }
+      .main-tabs .mtab { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; }
       .tab { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; }
       button { min-height: 36px; }  /* 触屏点击区 */
       /* 内联输入行：手机端竖排全宽 */
@@ -93,10 +105,66 @@
       .run-btns { flex-wrap: wrap; }
       .run-btns button { flex: 1 1 30%; }
     }
+
+    /* ---------- 深色模式：跟随系统（prefers-color-scheme） ---------- */
+    @media (prefers-color-scheme: dark) {
+      body { background: #121418; color: #d8dde4; }
+      .card { background: #1c1f26; border-color: #2e333c; box-shadow: none; }
+      h3 { color: #9aa3af; }
+      .main-tabs { border-color: #2e333c; }
+      .main-tabs .mtab { color: #9aa3af; }
+      .main-tabs .mtab.active, .main-tabs .mtab:hover { color: #90caf9; border-color: #90caf9; }
+      .tabs { border-color: #2e333c; }
+      .tab { color: #9aa3af; }
+      .tab.active { color: #90caf9; border-color: #90caf9; }
+      .row label { color: #9aa3af; }
+      .row input, .row select, input, textarea, select { background: #262b33; color: #d8dde4; border-color: #3a4150; }
+      button { background: #262b33; color: #d8dde4; border-color: #3a4150; }
+      button:hover { background: #333a46; }
+      button.primary { background: #1976d2; color: #fff; border-color: #1976d2; }
+      button.danger { color: #ff8a80; border-color: #ff8a80; }
+      th, td { border-color: #2e333c; }
+      th { background: #262b33; }
+      tbody tr:nth-child(odd) td { background: #21252d; }
+      .action { background: #1f232b; border-color: #2e333c; }
+      .sel-row { background: #262b33; }
+      .domain-tag { background: #10243a; }
+      .domain-tag code { color: #90caf9; }
+      #runProgress { background: #16191f !important; }
+      .msg.success { background: #1b2e24; color: #81c784; }
+      .msg.error { background: #331f24; color: #ef9a9a; }
+      .msg.info { background: #14273a; color: #90caf9; }
+      .pwd-tip { background: #33290f; border-color: #66521f; color: #ffd54f; }
+      .pwd-tip b { color: #ffab91; }
+      .mobile-tip { background: #33290f; border-color: #66521f; color: #ffd54f; }
+      .insert-bar { border-top-color: #2e333c; }
+      .insert-bar button { background: #33290f; border-color: #66521f; color: #ffb74d; }
+      .insert-bar button:hover { background: #4a3c16; }
+      .op-move { background: #10243a; color: #90caf9; border-color: #1e3a5f; }
+      .sel-row .sel-use { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      .badge.daily { background: #1b2e24; color: #81c784; }
+      .badge.weekly { background: #10243a; color: #90caf9; }
+      .badge.monthly { background: #33290f; color: #ffb74d; }
+      .badge.once { background: #2a1f33; color: #ce93d8; }
+      code.inline { background: #262b33; color: #f48fb1; }
+      .saved-hint { color: #81c784; }
+      .empty { color: #6b7684; }
+    }
   </style>
 </head>
 <body>
-  <h1>自动填表配置面板</h1>
+  <h1>🎯 自动填表配置面板</h1>
+
+  <!-- 明文密码提示：本浏览器开发者工具可读，不会被其他人看到 -->
+  <div class="pwd-tip" id="pwdTip">🔒 本浏览器保存的<b>账号/密码是明文</b>：本浏览器的<b>开发者工具（F12）可读</b>，不会被其他人看到（各浏览器互不互通）。</div>
+
+  <!-- 主功能分组导航（要求5） -->
+  <div class="main-tabs" id="mainTabs">
+    <button class="mtab active" data-g="run">🚀 运行</button>
+    <button class="mtab" data-g="acct">👤 账号</button>
+    <button class="mtab" data-g="cdk">🎫 CDK</button>
+    <button class="mtab" data-g="cfg">⚙️ 配置</button>
+  </div>
 
   <!-- 手机端提示：告诉用户这是远端控制台 -->
   <div class="mobile-tip" id="mobileTip">
@@ -113,7 +181,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card grouped" data-group="run">
     <div class="domain-tag">当前域名：<code id="currentDomain">未选择</code></div>
     <div class="row" style="margin-top:8px">
       <label>域名</label>
@@ -125,13 +193,13 @@
     </div>
   </div>
 
-  <div class="row" style="margin-bottom:10px">
+  <div class="row grouped" data-group="run" style="margin-bottom:10px">
     <label>当前区</label>
     <input id="currentRegion" placeholder="输入汉字几区，如：六区" style="flex:0 1 240px;min-width:120px">
     <span style="color:#999;font-size:12px">输入汉字几区（如：六区），同步到 CDK 页和领取页的区下拉框</span>
   </div>
 
-  <div class="toolbar">
+  <div class="toolbar grouped" data-group="run">
     <button id="runAll" style="background:#1976d2;color:#fff;border:0;padding:8px 20px;font-size:14px;font-weight:bold;border-radius:3px;cursor:pointer">🚀 一键执行全部</button>
     <span style="color:#999;font-size:12px;margin:0 8px">执行:</span>
     <label style="font-size:13px;cursor:pointer"><input type="checkbox" id="runLogin" checked>
@@ -146,14 +214,21 @@ K 页</label>
     <button id="export">导出 JSON</button>
     <button id="import">导入 JSON</button>
     <button id="clear">清空</button>
+    <span id="savedHint" class="saved-hint"></span>
   </div>
 
   <!-- 一键执行进度面板 -->
-  <div class="card" id="runPanel" style="display:none">
+  <div class="card grouped" id="runPanel" data-group="run" style="display:none">
     <h2>
       <span id="runTitle">🚀 执行中</span>
       <span style="font-weight:normal;color:#999;font-size:12px" id="runHint"></span>
     </h2>
+    <div class="log-tools" style="margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <button id="logClear" title="清空本次运行的日志显示">🗑 清空</button>
+      <button id="logCopy" title="复制本次运行的日志到剪贴板">📋 复制日志</button>
+      <button id="logExport" title="把本次运行的全部日志导出为 txt 文件，方便排查">💾 导出全部日志</button>
+      <label style="font-size:12px;color:#666;margin-left:auto;display:flex;align-items:center;gap:4px"><input type="checkbox" id="logAutoScroll" checked> 自动滚动</label>
+    </div>
     <div id="runProgress" style="background:#f5f5f5;padding:8px;border-radius:3px;height:280px;overflow:auto;font-family:monospace;font-size:11px;line-height:1.6;white-space:pre-wrap"></div>
     <div class="run-btns" style="margin-top:8px;display:flex;gap:6px">
       <button id="pauseBtn" onclick="togglePause()" style="background:#ff9800;color:#fff;border-color:#ff9800">⏸ 暂停</button>
@@ -163,9 +238,12 @@ K 页</label>
   </div>
 
   <!-- 账号管理 -->
-  <div class="card">
+  <div class="card grouped" data-group="acct">
     <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（仅显示本机添加的账号，其他人的不显示）</span></h2>
     <div class="table-wrap">
+      <div style="margin-bottom:6px">
+        <input id="accountSearch" placeholder="🔍 搜索账号（只搜本浏览器列表）" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;width:100%;box-sizing:border-box">
+      </div>
       <table id="accountTable">
         <thead>
           <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
@@ -178,10 +256,18 @@ K 页</label>
       <input id="newAccountPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
       <button class="primary" id="addAccount">+ 添加账号</button>
     </div>
+    <div class="acct-batch" style="margin-top:8px;padding:8px;background:#fafafa;border:1px dashed #ccc;border-radius:4px">
+      <div style="font-size:12px;color:#666;margin-bottom:4px">批量导入（每行：<b>账号 密码</b>，可加第三列区，如 <code>123456 密码 六区</code>；留空区=当前区）</div>
+      <textarea id="batchAccountInput" rows="3" placeholder="每行一个账号&#10;user1 pass1 六区&#10;user2 pass2" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:3px"></textarea>
+      <div style="margin-top:6px;display:flex;align-items:center;gap:8px">
+        <button class="primary" id="batchImportBtn">📥 批量导入</button>
+        <span id="batchImportStatus" style="font-size:12px;color:#666"></span>
+      </div>
+    </div>
   </div>
 
   <!-- 测试兑换（临时账密，跑完入库） -->
-  <div class="card">
+  <div class="card grouped" data-group="acct">
     <h2>测试兑换 <span style="font-weight:normal;color:#999;font-size:12px">（临时账密，用后端 CDK 池跑一次，跑完自动入库）</span></h2>
     <div class="test-redeem-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="testUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
@@ -198,7 +284,7 @@ K 页</label>
   </div>
 
   <!-- 账号区查询/修改（要求2：密码校验后查看/修改账号的区） -->
-  <div class="card">
+  <div class="card grouped" data-group="acct">
     <h2>账号区查询/修改 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码验证，可查看/修改该账号的区）</span></h2>
     <div class="row">
       <label>账号</label>
@@ -221,7 +307,7 @@ K 页</label>
   </div>
 
   <!-- CDK 周期设置（要求3：每账号日/周/月码 + 周月起始时间，按区独立） -->
-  <div class="card">
+  <div class="card grouped" data-group="acct">
     <h2>CDK 周期设置 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码+区，可查看/修改该账号的日/周/月 CDK 与周期起始时间）</span></h2>
     <div class="row">
       <label>账号</label>
@@ -249,12 +335,13 @@ K 页</label>
         <input id="cdkMonthlyStart" type="date" style="flex:0 1 160px">
         <button class="primary" id="cdkCycleSaveBtn">保存修改</button>
       </div>
+      <div id="cdkNextPlan" style="font-size:12px;color:#1565c0;margin-top:6px"></div>
       <div style="font-size:12px;color:#999;margin-top:6px">周CDK 自起始日期起每 7 天跑一次；月CDK 自起始日期起每 30 天跑一次。起始日期留空 = 每天跑。跑出成功或"上限"后自动记录下次周期（错过会自动补跑）。</div>
     </div>
   </div>
 
   <!-- CDK 管理（后端） -->
-  <div class="card">
+  <div class="card grouped" data-group="cdk">
     <h2>CDK 池（后端管理）</h2>
     <p style="font-size:12px;color:#666;margin:0">
       CDK 由后端管理，不在面板添加。
@@ -279,7 +366,7 @@ K 页</label>
   </div>
 
   <!-- 页面配置 -->
-  <div class="card">
+  <div class="card grouped" data-group="cfg">
     <h2>页面配置</h2>
     <div class="tabs">
       <button class="tab active" data-page="login">登录页 (/player/login)</button>
@@ -290,14 +377,14 @@ K 页</label>
   </div>
 
   <!-- HTML 转选择器 -->
-  <div class="card">
+  <div class="card grouped" data-group="cfg">
     <h2>HTML 转选择器 <span style="font-weight:normal;color:#999;font-size:12px">（F12 → 选元素 → 右键 → Copy → Copy outerHTML → 粘贴到此）</span></h2>
     <textarea id="htmlInput" placeholder="粘贴 HTML 片段，自动解析" style="width:100%;min-height:50px;padding:6px;border:1px solid #ddd;border-radius:3px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
     <div id="htmlResult" style="margin-top:8px;display:none"></div>
   </div>
 
   <!-- 占位符说明 -->
-  <div class="card">
+  <div class="card grouped" data-group="cfg">
     <h2>答案占位符</h2>
     <p style="font-size:13px;margin:0">
       在"答案"里可以用：
@@ -315,6 +402,16 @@ K 页</label>
   <script>
     const $ = (id) => document.getElementById(id);
     const STORAGE_KEY = "autofill_configs_v3";
+    const REGION_MEMORY_KEY = "ocr_current_region_v1";
+
+    // ---------- 主功能分组导航（要求5） ----------
+    function switchGroup(g) {
+      document.querySelectorAll("#mainTabs .mtab").forEach(t => t.classList.toggle("active", t.dataset.g === g));
+      document.querySelectorAll("[data-group]").forEach(el => el.classList.toggle("g-hidden", el.dataset.group !== g));
+    }
+    document.querySelectorAll("#mainTabs .mtab").forEach(t => {
+      t.onclick = () => switchGroup(t.dataset.g);
+    });
     let pickerCallback = null;
     let currentPage = "login";
 
@@ -378,10 +475,16 @@ K 页</label>
       clearTimeout(saveConfigTimer);
       saveConfigTimer = setTimeout(async () => {
         try {
+          // 只推页面配置/域名/OCR 端点等共享项；账号与 CDK 列表仅存本浏览器 localStorage，
+          // 不随共享配置上推（否则后端 /api/config 会公开暴露别人的账密）
+          const body = Object.assign({}, currentConfig);
+          delete body.accounts;
+          delete body.cdkList;
+          delete body.runTargets;
           await fetch(SERVER + "/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(currentConfig)
+            body: JSON.stringify(body)
           });
         } catch (e) { /* 离线时忽略，不影响前端 */ }
       }, 1000);
@@ -412,6 +515,20 @@ K 页</label>
         }
       } catch (e) { /* 后端没起就用本地 */ }
       return false;
+    }
+
+    function normalizeConfig(c) {
+      // 配置完整性兜底：字段缺/坏就补默认，不白屏
+      if (!c || typeof c !== "object" || Array.isArray(c)) return defaultConfig();
+      const d = defaultConfig();
+      if (typeof c.domain !== "string" || !c.domain) c.domain = d.domain;
+      if (!c.pages || typeof c.pages !== "object") c.pages = JSON.parse(JSON.stringify(d.pages));
+      for (const k in d.pages) {
+        if (!c.pages[k] || !Array.isArray(c.pages[k].actions)) c.pages[k] = JSON.parse(JSON.stringify(d.pages[k]));
+      }
+      if (!Array.isArray(c.accounts)) c.accounts = [];
+      if (!Array.isArray(c.cdkList)) c.cdkList = [];
+      return c;
     }
 
     function loadAll() {
@@ -489,7 +606,10 @@ K 页</label>
         tbody.innerHTML = '<tr><td colspan="4" class="empty">还没有账号</td></tr>';
         return;
       }
-      tbody.innerHTML = currentConfig.accounts.map((a, i) =>
+      const kw = ($("accountSearch") && $("accountSearch").value || "").trim().toLowerCase();
+      const list = currentConfig.accounts.map((a, i) => ({ a, i }))
+        .filter(x => !kw || x.a.username.toLowerCase().includes(kw));
+      tbody.innerHTML = list.map(({ a, i }) =>
         `<tr>
           <td><input value="${esc(a.username)}" onchange="updAccount(${i},'username',this.value)"></td>
           <td><input type="password" value="${esc(a.password)}" onchange="updAccount(${i},'password',this.value)"></td>
@@ -498,6 +618,44 @@ K 页</label>
         </tr>`
       ).join("");
     }
+    $("accountSearch").addEventListener("input", renderAccounts);
+
+    // 批量导入账号（串行入库，逻辑与单条添加一致：入库 + 本地列表）
+    $("batchImportBtn").onclick = async () => {
+      const raw = $("batchAccountInput").value.trim();
+      if (!raw) { showMsg("error", "请先粘贴账号（每行：账号 密码 区）"); return; }
+      const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (!lines.length) { showMsg("error", "没有可导入的账号"); return; }
+      $("batchImportBtn").disabled = true;
+      $("batchImportStatus").textContent = "导入中…";
+      let ok = 0, fail = 0, firstErr = "";
+      for (const line of lines) {
+        const parts = line.split(/[\s,，]+/);
+        if (parts.length < 2) { fail++; firstErr = firstErr || "有行缺密码"; continue; }
+        const u = parts[0], p = parts[1], rg = (parts[2] || currentRegionValue());
+        try {
+          const d = await apiAddAccount(u, p, rg);
+          if (d.ok) {
+            ok++;
+            const idx = currentConfig.accounts.findIndex(a => a.username === u);
+            if (idx >= 0) currentConfig.accounts[idx].password = p;
+            else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: rg });
+          } else {
+            fail++; firstErr = firstErr || (d.error || "");
+          }
+        } catch (e) {
+          fail++; firstErr = firstErr || e.message;
+        }
+      }
+      renderAccounts();
+      persistLocalConfig();
+      syncConfigToServer();
+      $("batchImportBtn").disabled = false;
+      $("batchImportStatus").textContent = "";
+      if (fail > 0) showMsg("error", `批量导入完成：成功 ${ok} 条，失败 ${fail} 条` + (firstErr ? `（如：${firstErr}）` : ""));
+      else showMsg("success", `批量导入完成：成功 ${ok} 条`);
+    };
+
     function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; syncConfigToServer(); persistLocalConfig(); }
     function removeAccount(i) { currentConfig.accounts.splice(i, 1); renderAccounts(); syncConfigToServer(); persistLocalConfig(); }
 
@@ -745,19 +903,26 @@ K 页</label>
       };
     });
 
+    // 添加账号到后端（入库逻辑与原有一致：insert/update/skip 按账号去重）
+    async function apiAddAccount(u, p, rg) {
+      const r = await fetch(SERVER + "/api/accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: u, password: p, regions: [rg] })
+      });
+      return await r.json();
+    }
+
     // 按钮事件
     $("addAccount").onclick = async () => {
       const u = $("newAccountUser").value.trim();
       const p = $("newAccountPass").value.trim();
       if (!u || !p) { showMsg("error", "请输入账号和密码"); return; }
+      $("addAccount").disabled = true;
+      $("addAccount").textContent = "添加中…";
       // 上传到数据库（按账号去重）
       try {
-        const r = await fetch(SERVER + "/api/accounts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p, regions: [currentRegionValue()] })
-        });
-        const d = await r.json();
+        const d = await apiAddAccount(u, p, currentRegionValue());
         if (d.ok) {
           const actionMap = { insert: "已添加", update: "密码已更新", skip: "已存在" };
           showMsg("success", `账号 ${u} ${actionMap[d.action] || "处理完成"}`);
@@ -775,6 +940,9 @@ K 页</label>
         }
       } catch (e) {
         showMsg("error", "网络错误：" + e.message);
+      } finally {
+        $("addAccount").disabled = false;
+        $("addAccount").textContent = "+ 添加账号";
       }
     };
     // CDK 已改为后端管理（CLI），面板不再处理 addCdk
@@ -854,6 +1022,11 @@ K 页</label>
         const sel = page.actions.find(a => a && a.type === "select" && REGION_SELECTORS.indexOf(a.selector) >= 0);
         if (sel && sel.value) { val = sel.value; break; }
       }
+      // 区记忆：本浏览器上次用的区优先
+      try {
+        const mem = (localStorage.getItem(REGION_MEMORY_KEY) || "").trim();
+        if (mem) val = mem;
+      } catch (e) {}
       $("currentRegion").value = val;
     }
     function applyRegionToPages(region) {
@@ -872,6 +1045,7 @@ K 页</label>
     }
     $("currentRegion").onchange = () => {
       applyRegionToPages(currentRegionValue());
+      try { localStorage.setItem(REGION_MEMORY_KEY, currentRegionValue()); } catch (e) {}
       showMsg("success", "当前区已设为 " + currentRegionValue() + "，已同步到 CDK 页/领取页");
     };
 
@@ -955,6 +1129,12 @@ K 页</label>
         $("cdkWeeklyStart").value = d.weekly_start || "";
         $("cdkMonthlyStart").value = d.monthly_start || "";
         $("cdkQueryResult").style.display = "block";
+        const nxt = [];
+        if (d.weekly_next) nxt.push("周CDK：下次 " + d.weekly_next);
+        else nxt.push("周CDK：未排期（填起始日期或跑出结果后自动排）");
+        if (d.monthly_next) nxt.push("月CDK：下次 " + d.monthly_next);
+        else nxt.push("月CDK：未排期（填起始日期或跑出结果后自动排）");
+        $("cdkNextPlan").textContent = "📅 下次计划： " + nxt.join("  ");
       } catch (e) { showMsg("error", "网络错误：" + e.message); }
     };
     $("cdkCycleSaveBtn").onclick = async () => {
@@ -977,6 +1157,12 @@ K 页</label>
         });
         const d = await r.json();
         if (!d.ok) { showMsg("error", d.error || "保存失败"); return; }
+        const nxt = [];
+        if (d.weekly_next) nxt.push("周CDK：下次 " + d.weekly_next);
+        else nxt.push("周CDK：未排期");
+        if (d.monthly_next) nxt.push("月CDK：下次 " + d.monthly_next);
+        else nxt.push("月CDK：未排期");
+        $("cdkNextPlan").textContent = "📅 下次计划：\u2002" + nxt.join("\u2002\u2002");
         showMsg("success", "账号 " + u + "（区：" + (rg || "默认") + "）的 CDK 设置已保存");
       } catch (e) { showMsg("error", "网络错误：" + e.message); }
     };
@@ -992,6 +1178,8 @@ K 页</label>
       saveAll(all);
       $("currentDomain").textContent = dom;
       syncConfigToServer();
+      const _hint = $("savedHint");
+      if (_hint) _hint.textContent = "✓ 已保存 " + new Date().toLocaleTimeString();
       return true;
     }
 
@@ -1054,7 +1242,7 @@ K 页</label>
       const r = new FileReader();
       r.onload = (ev) => {
         try {
-          currentConfig = JSON.parse(ev.target.result);
+          currentConfig = normalizeConfig(JSON.parse(ev.target.result));
           $("domainInput").value = currentConfig.domain || "";
           $("ocrEndpoint").value = currentConfig.ocrEndpoint || "";
           $("currentDomain").textContent = currentConfig.domain || "未设置";
@@ -1165,6 +1353,7 @@ K 页</label>
       // 显示进度面板
       $("runPanel").style.display = "block";
       $("runTitle").textContent = "🚀 执行中";
+      $("runTitle").style.color = "#1976d2";
       $("runHint").textContent = "正在提交任务给后端...";
       $("runProgress").innerHTML = "";
       // 初始化暂停按钮（不禁用——任何状态都可点，由 onclick 兜底判断 currentJobId）
@@ -1205,6 +1394,7 @@ K 页</label>
         } else if (d.type === "done") {
           appendLog(d.ok ? "success" : "error", (d.ok ? "✅ " : "✗ ") + (d.msg || ""));
           $("runTitle").textContent = d.ok ? "✅ 完成" : "✗ 失败";
+          $("runTitle").style.color = d.ok ? "#2e7d32" : "#c62828";
           $("runHint").textContent = d.msg || (d.ok ? "全部完成" : "执行失败");
           // 任务结束——重置按钮状态（不置灰，按钮一直可点）
           $("pauseBtn").textContent = "⏸ 暂停";
@@ -1239,8 +1429,36 @@ K 页</label>
       const colors = { info: "#333", success: "#2e7d32", error: "#c62828", warn: "#e65100" };
       const html = `<div style="color:${colors[level] || '#333'};margin-bottom:2px">[${new Date().toLocaleTimeString()}] ${escapeHtml(msg)}</div>`;
       $("runProgress").insertAdjacentHTML("beforeend", html);
-      $("runProgress").scrollTop = $("runProgress").scrollHeight;
+      if ($("logAutoScroll") && $("logAutoScroll").checked) {
+        $("runProgress").scrollTop = $("runProgress").scrollHeight;
+      }
     }
+
+    // 日志工具：清空 / 复制 / 导出本次运行的全部日志
+    $("logClear").onclick = () => { $("runProgress").innerHTML = ""; };
+    $("logCopy").onclick = async () => {
+      const txt = $("runProgress").innerText;
+      if (!txt.trim()) { showMsg("info", "日志是空的"); return; }
+      try {
+        await navigator.clipboard.writeText(txt);
+        showMsg("success", "已复制本次运行的全部日志");
+      } catch (e) {
+        showMsg("error", "复制失败：" + e.message + "（可用「导出全部日志」下载）");
+      }
+    };
+    $("logExport").onclick = () => {
+      const txt = $("runProgress").innerText || "";
+      if (!txt.trim()) { showMsg("info", "日志是空的"); return; }
+      const blob = new Blob([txt], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      const ts = new Date();
+      const pad = n => String(n).padStart(2, "0");
+      a.href = URL.createObjectURL(blob);
+      a.download = `ocr-run-${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}-${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}.txt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showMsg("success", "已导出全部日志文件");
+    };
 
     function escapeHtml(s) {
       return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1297,18 +1515,11 @@ K 页</label>
       const domKeys = Object.keys(all);
       if (domKeys.length) {
         const target = domKeys.find(d => d === "newxiadan.3f8cz.com") || domKeys[0];
-        currentConfig = all[target];
-        if (!currentConfig.pages) currentConfig.pages = defaultConfig().pages;
-        if (!currentConfig.accounts) currentConfig.accounts = [];
-        if (!currentConfig.cdkList) currentConfig.cdkList = [];
+        currentConfig = normalizeConfig(all[target]);  // 损坏/缺字段兜底
       } else {
         // 2. 首次访问（本浏览器无缓存）：用后端配置当一次模板，之后不再读后端
         const fromServer = await loadConfigFromServer();
-        if (!fromServer) {
-          currentConfig = defaultConfig();  // 后端也没有 → 内置默认模板
-        }
-        if (!currentConfig.accounts) currentConfig.accounts = [];
-        if (!currentConfig.cdkList) currentConfig.cdkList = [];
+        currentConfig = normalizeConfig(fromServer ? currentConfig : defaultConfig());  // 后端也没有 → 内置默认模板
         persistLocalConfig();  // 模板落地本地，下次启动只读本地
       }
       // 3. 账号始终只读本浏览器的（localStorage）
@@ -1320,6 +1531,20 @@ K 页</label>
       renderCdk();
       renderPageConfig();
       refreshRegionInput();
+      // 区记忆：若记忆区与页面配置里的区不一致，同步进页面配置（保证执行时用的区一致）
+      try {
+        const mem = (localStorage.getItem(REGION_MEMORY_KEY) || "").trim();
+        if (mem) {
+          let cfgVal = "";
+          for (const key of ["claim", "cdk"]) {
+            const page = currentConfig.pages[key];
+            if (!page || !Array.isArray(page.actions)) continue;
+            const sel = page.actions.find(a => a && a.type === "select" && REGION_SELECTORS.indexOf(a.selector) >= 0);
+            if (sel && sel.value) { cfgVal = sel.value; break; }
+          }
+          if (cfgVal && cfgVal !== mem) applyRegionToPages(mem);
+        }
+      } catch (e) { /* 忽略 */ }
       loadCdksFromServer();
 
       // 3. 拉后端信息生成二维码（PC 端才有意义）
