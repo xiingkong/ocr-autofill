@@ -220,6 +220,39 @@ K 页</label>
     </div>
   </div>
 
+  <!-- CDK 周期设置（要求3：每账号日/周/月码 + 周月起始时间，按区独立） -->
+  <div class="card">
+    <h2>CDK 周期设置 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码+区，可查看/修改该账号的日/周/月 CDK 与周期起始时间）</span></h2>
+    <div class="row">
+      <label>账号</label>
+      <input id="cdkQueryUser" placeholder="游戏账号">
+      <label style="width:60px">密码</label>
+      <input id="cdkQueryPass" type="password" placeholder="游戏密码">
+      <label style="width:60px">区</label>
+      <input id="cdkQueryRegion" placeholder="如：六区（可留空=默认区）" style="flex:0 1 190px">
+      <button class="primary" id="cdkQueryBtn">查询</button>
+    </div>
+    <div id="cdkQueryResult" style="display:none;margin-top:8px;padding:10px;background:#fafafa;border:1px solid #eee;border-radius:4px">
+      <div style="font-size:13px;margin-bottom:6px">账号 <b id="cdkQueryName"></b>（区：<b id="cdkQueryRegionName"></b>）的 CDK 设置：</div>
+      <div class="row" style="margin:0">
+        <label style="width:auto;color:#666">日CDK</label>
+        <input id="cdkDailyInput" style="flex:0 1 150px" placeholder="默认 hmxdy666">
+        <label style="width:auto;color:#666">周CDK</label>
+        <input id="cdkWeeklyInput" style="flex:0 1 150px" placeholder="默认 hmxdy777">
+        <label style="width:auto;color:#666">月CDK</label>
+        <input id="cdkMonthlyInput" style="flex:0 1 150px" placeholder="默认 hmxdy888">
+      </div>
+      <div class="row" style="margin:0">
+        <label style="width:auto;color:#666">周起始日期</label>
+        <input id="cdkWeeklyStart" type="date" style="flex:0 1 160px">
+        <label style="width:auto;color:#666">月起始日期</label>
+        <input id="cdkMonthlyStart" type="date" style="flex:0 1 160px">
+        <button class="primary" id="cdkCycleSaveBtn">保存修改</button>
+      </div>
+      <div style="font-size:12px;color:#999;margin-top:6px">周CDK 自起始日期起每 7 天跑一次；月CDK 自起始日期起每 30 天跑一次。起始日期留空 = 每天跑。跑出成功或"上限"后自动记录下次周期（错过会自动补跑）。</div>
+    </div>
+  </div>
+
   <!-- CDK 管理（后端） -->
   <div class="card">
     <h2>CDK 池（后端管理）</h2>
@@ -897,6 +930,54 @@ K 页</label>
         regionEditing = d.regions || [];
         renderRegionTags();
         showMsg("success", "账号 " + u + " 的区已保存：" + (regionEditing.join(" / ") || "（空，执行时默认用页面配置区）"));
+      } catch (e) { showMsg("error", "网络错误：" + e.message); }
+    };
+
+    // ---------- CDK 周期设置（要求3） ----------
+    $("cdkQueryBtn").onclick = async () => {
+      const u = $("cdkQueryUser").value.trim();
+      const p = $("cdkQueryPass").value;
+      const rg = $("cdkQueryRegion").value.trim();
+      if (!u || !p) { showMsg("error", "请输入账号和密码"); return; }
+      try {
+        const r = await fetch(SERVER + "/api/cdk-schedule/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: u, password: p, region: rg })
+        });
+        const d = await r.json();
+        if (!d.ok) { showMsg("error", d.error || "查询失败"); $("cdkQueryResult").style.display = "none"; return; }
+        $("cdkQueryName").textContent = u;
+        $("cdkQueryRegionName").textContent = rg || "（默认）";
+        $("cdkDailyInput").value = d.cdk_daily || "";
+        $("cdkWeeklyInput").value = d.cdk_weekly || "";
+        $("cdkMonthlyInput").value = d.cdk_monthly || "";
+        $("cdkWeeklyStart").value = d.weekly_start || "";
+        $("cdkMonthlyStart").value = d.monthly_start || "";
+        $("cdkQueryResult").style.display = "block";
+      } catch (e) { showMsg("error", "网络错误：" + e.message); }
+    };
+    $("cdkCycleSaveBtn").onclick = async () => {
+      const u = $("cdkQueryUser").value.trim();
+      const p = $("cdkQueryPass").value;
+      const rg = $("cdkQueryRegion").value.trim();
+      if (!u || !p) { showMsg("error", "请重新查询账号"); return; }
+      try {
+        const r = await fetch(SERVER + "/api/cdk-schedule/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: u, password: p, region: rg,
+            cdk_daily: $("cdkDailyInput").value.trim(),
+            cdk_weekly: $("cdkWeeklyInput").value.trim(),
+            cdk_monthly: $("cdkMonthlyInput").value.trim(),
+            weekly_start: $("cdkWeeklyStart").value,
+            monthly_start: $("cdkMonthlyStart").value
+          })
+        });
+        const d = await r.json();
+        if (!d.ok) { showMsg("error", d.error || "保存失败"); return; }
+        showMsg("success", "账号 " + u + "（区：" + (rg || "默认") + "）的 CDK 设置已保存");
       } catch (e) { showMsg("error", "网络错误：" + e.message); }
     };
 

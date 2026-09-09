@@ -190,6 +190,22 @@ def _init_db():
         c.execute("ALTER TABLE accounts ADD COLUMN regions TEXT DEFAULT '[]'")
     except Exception:
         pass
+    # 要求3：账号级 CDK 码（日/周/月，默认 hmxdy666/777/888，每个账号可单独改）
+    for _col, _dft in (("cdk_daily", "'hmxdy666'"), ("cdk_weekly", "'hmxdy777'"), ("cdk_monthly", "'hmxdy888'")):
+        try:
+            c.execute("ALTER TABLE accounts ADD COLUMN %s TEXT DEFAULT %s" % (_col, _dft))
+        except Exception:
+            pass
+    # 要求3：账号×区 的周/月周期状态表（起始时间 = 用户填写的首期日期；last = 最近一次成功/上限日期）
+    c.execute("""CREATE TABLE IF NOT EXISTS account_cdk_cycles (
+        username TEXT NOT NULL,
+        region TEXT NOT NULL,
+        weekly_start TEXT DEFAULT '',
+        monthly_start TEXT DEFAULT '',
+        weekly_last TEXT DEFAULT '',
+        monthly_last TEXT DEFAULT '',
+        PRIMARY KEY (username, region)
+    )""")
     conn.commit()
     conn.close()
 
@@ -304,6 +320,91 @@ def db_set_account_regions(game_account, regions):
     conn.commit()
     conn.close()
     return seen
+
+def db_get_account_cdks(game_account):
+    """读取账号的日/周/月 CDK 码；无记录或空值返回默认 hmxdy666/777/888"""
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT cdk_daily, cdk_weekly, cdk_monthly FROM accounts WHERE game_account=?", (game_account,))
+        row = c.fetchone()
+        if not row:
+            return {"daily": "hmxdy666", "weekly": "hmxdy777", "monthly": "hmxdy888"}
+        d = (row[0] or "").strip() or "hmxdy666"
+        w = (row[1] or "").strip() or "hmxdy777"
+        m = (row[2] or "").strip() or "hmxdy888"
+        return {"daily": d, "weekly": w, "monthly": m}
+    finally:
+        conn.close()
+
+def db_set_account_cdks(game_account, daily=None, weekly=None, monthly=None):
+    """更新账号的日/周/月 CDK 码。传 None = 不改；传空字符串 = 恢复默认。返回更新后的三个码。"""
+    cur = db_get_account_cdks(game_account)
+    d = (daily if daily is not None else cur["daily"] or "").strip() or "hmxdy666"
+    w = (weekly if weekly is not None else cur["weekly"] or "").strip() or "hmxdy777"
+    m = (monthly if monthly is not None else cur["monthly"] or "").strip() or "hmxdy888"
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE accounts SET cdk_daily=?, cdk_weekly=?, cdk_monthly=? WHERE game_account=?",
+                  (d, w, m, game_account))
+        conn.commit()
+        return {"daily": d, "weekly": w, "monthly": m}
+    finally:
+        conn.close()
+
+def db_get_cdk_cycle(username, region):
+    """读取 账号×区 的周/月周期状态（起始时间/上次成功时间），无记录返回空 dict"""
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT weekly_start, monthly_start, weekly_last, monthly_last FROM account_cdk_cycles WHERE username=? AND region=?",
+                  (username, region or ""))
+        row = c.fetchone()
+        if not row:
+            return {}
+        return {"weekly_start": row[0] or "", "monthly_start": row[1] or "",
+                "weekly_last": row[2] or "", "monthly_last": row[3] or ""}
+    finally:
+        conn.close()
+
+def db_set_cdk_cycle(username, region, weekly_start=None, monthly_start=None):
+    """写入/更新 账号×区 的周/月起始时间。传 None = 不改；传空字符串 = 清空（该码每天跑）。"""
+    cur = db_get_cdk_cycle(username, region)
+    w = (weekly_start if weekly_start is not None else cur.get("weekly_start", "") or "").strip()
+    m = (monthly_start if monthly_start is not None else cur.get("monthly_start", "") or "").strip()
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last)
+                     VALUES (?,?,?,?,?,?)
+                     ON CONFLICT(username, region) DO UPDATE SET weekly_start=excluded.weekly_start, monthly_start=excluded.monthly_start""",
+                  (username, region or "", w, m, cur.get("weekly_last", ""), cur.get("monthly_last", "")))
+        conn.commit()
+        return {"weekly_start": w, "monthly_start": m}
+    finally:
+        conn.close()
+
+def db_update_cdk_cycle_last(username, region, kind):
+    """周/月 CDK 成功或命中"上限"后，把本次日期记为 last（下次周期从今天起算）。返回今天的日期字符串。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    col = "weekly_last" if kind == "weekly" else "monthly_last"
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE account_cdk_cycles SET %s=? WHERE username=? AND region=?" % col,
+                  (today, username, region or ""))
+        if c.rowcount == 0:
+            cur = db_get_cdk_cycle(username, region)
+            c.execute("""INSERT INTO account_cdk_cycles (username, region, weekly_start, monthly_start, weekly_last, monthly_last)
+                         VALUES (?,?,?,?,?,?)
+                         ON CONFLICT(username, region) DO UPDATE SET %s=excluded.%s""" % (col, col),
+                      (username, region or "", cur.get("weekly_start", ""), cur.get("monthly_start", ""),
+                       today if kind == "weekly" else "", today if kind == "monthly" else ""))
+        conn.commit()
+        return today
+    finally:
+        conn.close()
 
 def db_get_cdks():
     conn = _db_conn()
@@ -1373,6 +1474,46 @@ def get_lan_ip():
         return "127.0.0.1"
 
 # 调度判断：今天是否该执行某个 CDK
+def _cycle_due(start_str, last_str, cycle_days):
+    """周/月周期判定（要求3）：
+    - 起始时间为空 → 每天跑（True）
+    - 距起始时间不足一个周期 → 未到首期（False）
+    - 从未成功过 → 到点即跑（True）
+    - 上次成功距今满一个周期 → 跑（True，含错过补跑：跑完会重算下次周期）
+    - 否则（本期已跑过）→ False
+    """
+    if not (start_str or "").strip():
+        return True
+    from datetime import date
+    try:
+        s = date.fromisoformat((start_str or "").strip())
+        t = date.today()
+        if (t - s).days < cycle_days:
+            return False
+        if not (last_str or "").strip():
+            return True
+        l = date.fromisoformat((last_str or "").strip())
+        return (t - l).days >= cycle_days
+    except Exception:
+        return True
+
+def _account_active_cdks(acc, region, global_active):
+    """要求3：某账号当天要跑的 CDK 列表 = 账号日码（每天）+ 周码（周周期到点）+ 月码（月周期到点）+ 全局 once（未用）"""
+    out = []
+    username = acc.get("username", "?")
+    codes = db_get_account_cdks(username)
+    cycle = db_get_cdk_cycle(username, region or "")
+    if codes["daily"]:
+        out.append({"code": codes["daily"], "schedule": "daily", "used": False, "account_cdk": True})
+    if codes["weekly"] and _cycle_due(cycle.get("weekly_start", ""), cycle.get("weekly_last", ""), 7):
+        out.append({"code": codes["weekly"], "schedule": "weekly", "used": False, "account_cdk": True})
+    if codes["monthly"] and _cycle_due(cycle.get("monthly_start", ""), cycle.get("monthly_last", ""), 30):
+        out.append({"code": codes["monthly"], "schedule": "monthly", "used": False, "account_cdk": True})
+    for c in global_active:
+        if c.get("schedule") == "once":
+            out.append(c)
+    return out
+
 def cdk_active_today(cdk):
     if cdk.get("used") and cdk.get("schedule") == "once":
         return False
@@ -1714,6 +1855,24 @@ def run_job(job_id, config):
     threading.Thread(target=th, daemon=True).start()
 
 
+def _build_scheduled_config():
+    """组装定时任务/手动 now 的执行配置：页面配置 + 全部账号 + 可用 CDK。
+    配置来源：LAST_CONFIG（内存，最近一次前端保存/执行）为空时回退持久化文件 autofill_config.json。
+    区分 once / daily：每日 CDK 只能 used=0 的才跑；一次性 CDK 不论 used 都跑。"""
+    cfg = json.loads(json.dumps(LAST_CONFIG)) if LAST_CONFIG else load_persisted_config()
+    cfg = dict(cfg or {})
+    cfg.pop("schedule", None)  # 调度信息不传给执行逻辑
+    cfg["accounts"] = db_get_accounts(include_password=True)
+    # 要求3：定时任务/now 用账号级日/周/月码（每账号各自生成），全局 CDK 池只取一次性（once）；
+    # 全局 daily 池由账号级日/周/月码体系接管，不再在定时任务里使用
+    cfg["cdkList"] = []
+    for c in db_get_cdks():
+        if c["once"]:
+            cfg["cdkList"].append({"code": c["code"], "schedule": "once", "used": False, "_db_id": c["id"]})
+    cfg["accountCdks"] = True
+    return cfg
+
+
 def _scheduler_loop():
     """定时任务守护线程：每 30s 检查一次，到点触发一键执行
     时间配置从 LAST_CONFIG["schedule"]["time"] 读，默认 "00:05"
@@ -1759,18 +1918,7 @@ def _scheduler_loop():
                         "cancel_requested": False,
                         "trigger": "schedule",
                     }
-                    cfg_to_run = json.loads(json.dumps(LAST_CONFIG)) if LAST_CONFIG else {}
-                    cfg_to_run.pop("schedule", None)  # 调度信息不传给执行逻辑
-                    # 定时任务从数据库读所有账号 + 全局 CDK（不依赖前端 config）
-                    # 区分 once / daily：每日 CDK 只能 used=0 的才跑；一次性 CDK 不论 used 都跑
-                    cfg_to_run["accounts"] = db_get_accounts(include_password=True)
-                    cfg_to_run["cdkList"] = []
-                    for c in db_get_cdks():
-                        if c["once"]:
-                            cfg_to_run["cdkList"].append({"code": c["code"], "schedule": "once", "used": False, "_db_id": c["id"]})
-                        else:
-                            if not c["used"]:
-                                cfg_to_run["cdkList"].append({"code": c["code"], "schedule": "daily", "used": False, "_db_id": c["id"]})
+                    cfg_to_run = _build_scheduled_config()
                     # 单独启动线程跑这个 job
                     def _sched_th():
                         try:
@@ -1815,6 +1963,20 @@ def _override_region_selects(pages_cfg, region):
     return out
 
 
+def _normalize_run_targets(config):
+    """登录页与领取页强制绑定：含任一个就补另一个；为空时默认三个全跑。
+    绑定规则：领取页必须带登录页（领取依赖已登录），登录页必须带领取页（登录后必走领取）。"""
+    run_targets = list((config or {}).get("runTargets") or [])
+    if not run_targets:
+        run_targets = ["login", "claim", "cdk"]
+    if "login" in run_targets or "claim" in run_targets:
+        if "login" not in run_targets:
+            run_targets.insert(0, "login")
+        if "claim" not in run_targets:
+            run_targets.append("claim")
+    return run_targets, config
+
+
 def _run_job_impl(job_id, config, emit):
     """要求4 并发入口：按账号分组并发执行；并发=1 或单账号时走原串行逻辑（_run_job_impl_serial）。"""
     if not playwright:
@@ -1838,7 +2000,7 @@ def _run_job_impl(job_id, config, emit):
     }
     if browser_type in ("msedge", "chrome"):
         launch_kwargs["channel"] = browser_type
-    run_targets = config.get("runTargets") or ["login", "cdk"]
+    run_targets, _ = _normalize_run_targets(config)
 
     concurrency = get_concurrency()
     if concurrency < 1:
@@ -1968,6 +2130,8 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
 
     # 筛选今日活跃 CDK
     active_cdks = [c for c in cdk_list if cdk_active_today(c)]
+    # 要求3：账号级 CDK 模式（定时任务/now 用），每账号按自己的日/周/月码生成 CDK
+    account_cdks_mode = bool(config.get("accountCdks"))
     if not quiet:
         emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
         if active_cdks:
@@ -1992,8 +2156,8 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
     if not quiet:
         emit(f"🌐 启动浏览器: {browser_type} (headless={launch_kwargs['headless']})")
 
-    # 选择要执行的页面（前端勾选，默认两个都跑）
-    run_targets = config.get("runTargets") or ["login", "cdk"]
+    # 选择要执行的页面（前端勾选；登录<->领取强制绑定，默认三个全跑）
+    run_targets, _ = _normalize_run_targets(config)
     if not quiet:
         emit(f"🎯 执行目标: {', '.join(run_targets)}")
 
@@ -2038,7 +2202,13 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                 total_steps = 0
                 if "login" in run_targets: total_steps += len(run_units)
                 if "claim" in run_targets: total_steps += len(run_units)
-                if "cdk" in run_targets: total_steps += len(run_units) * len(active_cdks)
+                if "cdk" in run_targets:
+                    if account_cdks_mode:
+                        # 账号级模式：每 unit 最多 3 个账号码 + once 池数量
+                        once_n = len([c for c in active_cdks if c.get("schedule") == "once"])
+                        total_steps += len(run_units) * (3 + once_n)
+                    else:
+                        total_steps += len(run_units) * len(active_cdks)
                 done = 0
 
                 # 多轮重试：每个轮次只跑"验证码未成功"的账号，全部成功或达轮次上限才停
@@ -2093,38 +2263,39 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                 done += 1
 
                         if "claim" in run_targets:
-                            # 校验：claim 必须跟 login 一起勾（用户要求强制）
-                            if "login" not in run_targets:
-                                emit("  ⚠ 勾了领取页但没勾登录页，跳过领取", "warn")
+                            # 登录<->领取强制绑定：规范化后 claim 必有 login，直接执行
+                            page_obj = pages_run.get("claim", {})
+                            if not page_obj.get("actions"):
+                                emit("  (未配置领取页操作，跳过)", "warn")
                             else:
-                                page_obj = pages_run.get("claim", {})
-                                if not page_obj.get("actions"):
-                                    emit("  (未配置领取页操作，跳过)", "warn")
-                                else:
-                                    try:
-                                        # claim 默认 autoGoto=False（不跳转，登录后已在那）
-                                        if page_obj.get("autoGoto", False):
-                                            target = page_obj.get("urlPattern", "")
-                                            if target:
-                                                if not target.startswith("http"):
-                                                    target = "https://" + domain + target
-                                                page.goto(target, timeout=30000, wait_until="commit")
-                                                emit(f"  打开: {target}")
-                                            else:
-                                                emit("  (claim 设了 autoGoto 但没配 urlPattern，跳过 goto)", "warn")
-                                        # 不管跳不跳，都跑动作
-                                        for op in page_obj.get("actions", []):
-                                            _check_pause(job_id, emit)
-                                            _check_cancel(job_id, emit)
-                                            do_op(page, op, acc, None, emit)
-                                        time.sleep(0.5)
-                                    except Exception as e:
-                                        emit(f"  ✗ 领取失败: {e}", "error")
-                                    done += 1
+                                try:
+                                    # claim 默认 autoGoto=False（不跳转，登录后已在那）
+                                    if page_obj.get("autoGoto", False):
+                                        target = page_obj.get("urlPattern", "")
+                                        if target:
+                                            if not target.startswith("http"):
+                                                target = "https://" + domain + target
+                                            page.goto(target, timeout=30000, wait_until="commit")
+                                            emit(f"  打开: {target}")
+                                        else:
+                                            emit("  (claim 设了 autoGoto 但没配 urlPattern，跳过 goto)", "warn")
+                                    # 不管跳不跳，都跑动作
+                                    for op in page_obj.get("actions", []):
+                                        _check_pause(job_id, emit)
+                                        _check_cancel(job_id, emit)
+                                        do_op(page, op, acc, None, emit)
+                                    time.sleep(0.5)
+                                except Exception as e:
+                                    emit(f"  ✗ 领取失败: {e}", "error")
+                                done += 1
 
                         if "cdk" in run_targets:
-                            # 跑 CDK
-                            for cdk in active_cdks:
+                            # 跑 CDK（要求3：账号级模式 = 该账号日/周/月码 + once 池；原模式 = 全局 CDK 池）
+                            if account_cdks_mode:
+                                unit_cdks = _account_active_cdks(acc, region, active_cdks)
+                            else:
+                                unit_cdks = active_cdks
+                            for cdk in unit_cdks:
                                 _check_pause(job_id, emit)
                                 _check_cancel(job_id, emit)
                                 page_obj = pages_run.get("cdk", {})
@@ -2142,6 +2313,15 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                         _check_cancel(job_id, emit)
                                         do_op(page, op, acc, cdk, emit)
                                     time.sleep(0.5)
+                                    # 要求3：周/月码跑完，命中成功关键词或"上限" → 记录下次周期（从今天起算）
+                                    if cdk.get("account_cdk") and cdk.get("schedule") in ("weekly", "monthly"):
+                                        try:
+                                            _st, _dtl = _check_page_error(page, emit)
+                                            if _st == "success":
+                                                _last = db_update_cdk_cycle_last(acc.get("username", "?"), region or "", cdk["schedule"])
+                                                emit(f"  ✓ {cdk['schedule']}CDK 成功（{str(_dtl)[:40]}），下次周期从 {_last} 起算")
+                                        except Exception as _e:
+                                            emit(f"  ⚠ 记录 {cdk['schedule']}CDK 周期失败: {_e}", "warn")
                                     # 标记一次性 CDK 已用
                                     if cdk.get("schedule") == "once":
                                         cdk["used"] = True
@@ -2541,6 +2721,43 @@ class Handler(BaseHTTPRequestHandler):
                 new_regions = body.get("regions")
                 updated = db_set_account_regions(ga, new_regions if isinstance(new_regions, list) else [])
                 self._json(200, {"ok": True, "username": ga, "regions": updated or []})
+            elif self.path == '/api/cdk-schedule/query':
+                # 要求3：查询账号的 CDK 周期设置（需密码校验，防乱改他人账号）
+                body = self._read_body()
+                ga = (body.get("username") or "").strip()
+                gp = (body.get("password") or "").strip()
+                if not ga or not gp:
+                    return self._json(400, {"error": "账号密码不能为空"})
+                if not db_verify_account_password(ga, gp):
+                    return self._json(200, {"ok": False, "error": "账号不存在或密码不对"})
+                region = (body.get("region") or "").strip()
+                codes = db_get_account_cdks(ga)
+                cycle = db_get_cdk_cycle(ga, region)
+                self._json(200, {"ok": True, "username": ga, "region": region,
+                                 "cdk_daily": codes["daily"], "cdk_weekly": codes["weekly"], "cdk_monthly": codes["monthly"],
+                                 "weekly_start": cycle.get("weekly_start", ""), "monthly_start": cycle.get("monthly_start", "")})
+            elif self.path == '/api/cdk-schedule/update':
+                # 要求3：修改账号的 CDK 码与周/月起始时间（覆盖式，需密码校验）
+                body = self._read_body()
+                ga = (body.get("username") or "").strip()
+                gp = (body.get("password") or "").strip()
+                if not ga or not gp:
+                    return self._json(400, {"error": "账号密码不能为空"})
+                if not db_verify_account_password(ga, gp):
+                    return self._json(200, {"ok": False, "error": "账号不存在或密码不对"})
+                region = (body.get("region") or "").strip()
+                _d = body.get("cdk_daily"); _w = body.get("cdk_weekly"); _m = body.get("cdk_monthly")
+                _ws = body.get("weekly_start"); _ms = body.get("monthly_start")
+                codes = db_set_account_cdks(ga,
+                                            _d if isinstance(_d, str) else None,
+                                            _w if isinstance(_w, str) else None,
+                                            _m if isinstance(_m, str) else None)
+                cycle = db_set_cdk_cycle(ga, region,
+                                         _ws if isinstance(_ws, str) else None,
+                                         _ms if isinstance(_ms, str) else None)
+                self._json(200, {"ok": True, "username": ga, "region": region,
+                                 "cdk_daily": codes["daily"], "cdk_weekly": codes["weekly"], "cdk_monthly": codes["monthly"],
+                                 "weekly_start": cycle.get("weekly_start", ""), "monthly_start": cycle.get("monthly_start", "")})
             elif self.path == '/api/cdks':
                 # 添加 CDK（前端如有用到）
                 body = self._read_body()
@@ -2593,7 +2810,7 @@ class Handler(BaseHTTPRequestHandler):
                     "pages": (LAST_CONFIG.get("pages") if LAST_CONFIG else None) or json.load(open(CONFIG_FILE, encoding="utf-8")).get("pages", {}) if os.path.exists(CONFIG_FILE) else {},
                     "accounts": [{"username": username, "password": password}],
                     "cdkList": active_cdks,
-                    "runTargets": ["login", "cdk"],
+                    "runTargets": ["login", "claim", "cdk"],
                 }
                 # 测试兑换按前端传来的区跑（覆盖页面配置里的区下拉框）
                 if req_regions:
@@ -2981,6 +3198,52 @@ def concurrency_cli(args):
         return 1
 
 
+def run_now_cli(args):
+    """手动执行一次定时任务（同凌晨 00:05 的全部自动化），跑完退出。"""
+    _init_db()
+    with JOBS_LOCK:
+        has_running = any(j.get("status") == "running" for j in JOBS.values())
+    if has_running:
+        print("✗ 有任务在跑，稍后再试", flush=True)
+        return 1
+    cfg = _build_scheduled_config()
+    if not cfg.get("accounts"):
+        print("✗ 数据库没有账号，无法执行（先加账号）", flush=True)
+        return 1
+    jid = uuid.uuid4().hex
+    JOBS[jid] = {
+        "status": "running", "log": [], "result": None, "started": time.time(),
+        "cond": threading.Condition(), "last_index": 0, "subscribers": 0,
+        "updatedConfig": None, "paused": False, "cancel_requested": False,
+        "trigger": "now",
+    }
+    def _emit(msg, level="info"):
+        with JOBS_LOCK:
+            job = JOBS.get(jid)
+            if job:
+                job["log"].append({"time": time.time(), "msg": msg, "level": level})
+        print(msg, flush=True)
+        with JOBS[jid]["cond"]:
+            JOBS[jid]["cond"].notify_all()
+    print("⏰ 手动执行定时任务（同凌晨 00:05 的全部自动化）", flush=True)
+    try:
+        _run_job_impl(jid, cfg, _emit)
+        with JOBS_LOCK:
+            job = JOBS.get(jid)
+            if job and job.get("status") == "running":
+                job["status"] = "done"
+        return 0
+    except Exception as e:
+        import traceback
+        print(f"✗ 执行异常: {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        with JOBS_LOCK:
+            job = JOBS.get(jid)
+            if job:
+                job["status"] = "error"
+        return 1
+
+
 if __name__ == '__main__':
     # CLI 模式：python ocr_server.py cdk ... / account ... / cc ...
     if len(sys.argv) >= 2 and sys.argv[1] == "cdk":
@@ -2991,4 +3254,6 @@ if __name__ == '__main__':
         sys.exit(account_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "cc":
         sys.exit(concurrency_cli(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "now":
+        sys.exit(run_now_cli(sys.argv[2:]))
     main()
