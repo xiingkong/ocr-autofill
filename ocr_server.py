@@ -106,6 +106,9 @@ CONFIG_FILE = os.path.join(APP_DIR, "autofill_config.json")
 _DATA_DIR = os.environ.get("AUTOFILL_DATA_DIR", APP_DIR)
 os.makedirs(_DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(_DATA_DIR, "autofill.db")
+# 验证码识别统计：最近一次 + 历史追加（任务结束落盘，前端断联也能查）
+OCR_STATS_FILE = os.path.join(_DATA_DIR, "ocr_stats.json")
+OCR_STATS_HISTORY_FILE = os.path.join(_DATA_DIR, "ocr_stats_history.jsonl")
 
 # ---------- 运行设置（并发数等，命令 cc 管理） ----------
 SETTINGS_FILE = os.path.join(_DATA_DIR, "autofill_settings.json")
@@ -552,8 +555,16 @@ def get_panel_html_path():
 ocr = None
 try:
     import ddddocr
-    # beta=True 启用新模型，对部分复杂验证码识别率更高
-    ocr = ddddocr.DdddOcr(show_ad=False, beta=True)
+    # beta=True 启用新模型；可用环境变量 OCR_BETA=0 切回默认模型对比效果（改后 ocr-restart 生效）
+    ocr = ddddocr.DdddOcr(show_ad=False, beta=os.environ.get("OCR_BETA", "1") != "0")
+    # 可选限定字符集：OCR_RANGES=0(纯数字)/1(小写)/2(大写)/5(大写+数字)/6(字母+数字) 或自定义字符串
+    # 你的验证码是字母数字 4-5 位，默认字符集已覆盖，可不用设置；需要时再配
+    try:
+        _r = (os.environ.get("OCR_RANGES", "") or "").strip()
+        if _r:
+            ocr.set_ranges(int(_r) if _r.isdigit() else _r)
+    except Exception:
+        pass
 except ImportError:
     print("[WARN] ddddocr 未安装，OCR 不可用")
     print("       pip install ddddocr")
@@ -595,6 +606,8 @@ CAPTCHA_RETRY_KEYWORDS = ["验证码错误", "验证码不正确", "请重新输
 WRONG_PWD_KEYWORDS = ["账号或密码错误", "密码错误", "密码不正确", "账号不存在", "账号未注册", "用户不存在", "请检查账号和密码"]
 # 重试控制：错了刷图重 OCR，最多 3 次
 MAX_CAPTCHA_RETRY = 3
+# 页面没加载好（验证码图 src 空 / 按钮禁用 loading）时的整页刷新重试上限
+MAX_PAGE_RELOADS = 3
 # 验证码上下文：OCR 时设置，click 时检查并清空
 class _CaptchaCtxProxy:
     """线程隔离的验证码上下文：每个线程一份 dict，并行跑互不串数据。
@@ -620,6 +633,7 @@ captcha_ctx = _CaptchaCtxProxy({
     "image_sel": "",        # 验证码图片选择器
     "input_sel": "",        # 验证码输入框选择器
     "attempts": 0,          # 已重试次数
+    "page_reloads": 0,      # 页面刷新重试计数（验证码图 src 空 / 按钮禁用时整页刷新）
     "last_result": None,    # "success" / "failure" / "wrong_pwd" / None —— 给外层轮次循环判断用
 })
 
@@ -635,6 +649,128 @@ def preprocess_captcha_image(img_bytes):
         return buf.getvalue()
     except Exception:
         return None  # PIL 没装就不预处理
+
+def _pil_to_png_bytes(img):
+    import io
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+def preprocess_gray(img_bytes, scale=2):
+    """灰度候选：转灰度 + 放大 scale 倍（小图放大对 ddddocr 提升明显）。PIL 不可用返回 None。"""
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(img_bytes)).convert("L")
+        if scale and scale > 1:
+            img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+        return _pil_to_png_bytes(img)
+    except Exception:
+        return None
+
+def preprocess_binary2(img_bytes, scale=2):
+    """二值化候选：灰度 + 固定阈值 128 + 放大。"""
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(img_bytes)).convert("L")
+        img = img.point(lambda x: 255 if x > 128 else 0)
+        if scale and scale > 1:
+            img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+        return _pil_to_png_bytes(img)
+    except Exception:
+        return None
+
+def preprocess_denoise(img_bytes, scale=2):
+    """去噪候选：灰度 + 中值滤波去掉孤立噪点 + 放大。"""
+    try:
+        from PIL import Image, ImageFilter
+        import io
+        img = Image.open(io.BytesIO(img_bytes)).convert("L")
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        if scale and scale > 1:
+            img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+        return _pil_to_png_bytes(img)
+    except Exception:
+        return None
+
+# 验证码识别统计：线程本地（每个任务线程一份，并发互不干扰）
+_tls = threading.local()
+
+def _stats_bump(key, n=1):
+    st = getattr(_tls, "ocr_stats", None)
+    if st:
+        st[key] = st.get(key, 0) + n
+
+def _stats_method(method_name):
+    """记录最终被采用的方法命中数（去掉"×N"投票后缀，记基础方法名）"""
+    st = getattr(_tls, "ocr_stats", None)
+    if st:
+        st.setdefault("method_hits", {})
+        base = method_name.split("×")[0]
+        st["method_hits"][base] = st["method_hits"].get(base, 0) + 1
+
+def _finalize_ocr_stats(emit):
+    """任务结束时汇总验证码识别统计：emit 汇总行 + 落盘（最近一次 + 历史追加，断联也能查）"""
+    st = getattr(_tls, "ocr_stats", None)
+    if not st:
+        return
+    total = st.get("total", 0) or 0
+    ok = st.get("ok", 0) or 0
+    stats = {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "total": total,
+        "ok": ok,
+        "rate": round(ok * 100.0 / total, 1) if total else 0.0,
+        "allfail": st.get("allfail", 0) or 0,
+        "badlen": st.get("badlen", 0) or 0,
+        "method_hits": st.get("method_hits", {}) or {},
+    }
+    try:
+        emit("📊 验证码识别统计：成功 {ok}/{total}（{rate}%）｜全失败 {allfail}｜长度异常 {badlen}｜方法命中 {hits}".format(
+            ok=stats["ok"], total=stats["total"], rate=stats["rate"],
+            allfail=stats["allfail"], badlen=stats["badlen"],
+            hits=json.dumps(stats["method_hits"], ensure_ascii=False)), "info")
+        with open(OCR_STATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(stats, f, ensure_ascii=False, indent=2)
+        with open(OCR_STATS_HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(stats, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[WARN] 写 OCR 统计失败: {e}", flush=True)
+
+def ocr_with_variants(img_bytes, emit=None):
+    """多候选 OCR：原图 / 灰度 / 二值化 / 去噪 → 4-5 位长度校验 + 一致性投票。
+    返回 (text, method)；多个方法结果一致时 method 带次数（如"灰度×2"）更可信。"""
+    _stats_bump("total")
+    variants = [("原图", img_bytes)]
+    for name, fn in (("灰度", preprocess_gray), ("二值化", preprocess_binary2), ("去噪", preprocess_denoise)):
+        b = fn(img_bytes)
+        if b is not None:
+            variants.append((name, b))
+    candidates = []
+    for name, b in variants:
+        t = do_ocr_once(b, emit)
+        if t is not None:
+            candidates.append((t, name))
+    if not candidates:
+        _stats_bump("allfail")
+        return None, None
+    good = [(t, m) for t, m in candidates if is_valid_captcha_text(t)]
+    if good:
+        # 一致性投票：相同结果出现 ≥2 次优先（多方法一致更可信）
+        from collections import Counter
+        cnt = Counter(t for t, _ in good)
+        top_t, top_n = cnt.most_common(1)[0]
+        if top_n >= 2:
+            m = next(m for t, m in good if t == top_t)
+            _stats_bump("ok")
+            _stats_method(m)
+            return top_t, m + "×" + str(top_n)
+        _stats_bump("ok")
+        _stats_method(good[0][1])
+        return good[0]
+    _stats_bump("badlen")
+    return candidates[0]
 
 def is_valid_captcha_text(text):
     """F. 长度+字符校验：4-5 位字母数字"""
@@ -681,9 +817,9 @@ def refresh_captcha_image(page, image_sel, emit):
         prev_src = page.eval_on_selector(image_sel, "el => el.getAttribute('src') || ''") or ""
     except Exception:
         prev_src = ""
-    # 第一次点击换图
+    # 第一次点击换图（被弹窗挡住 → 立即关掉重试）
     try:
-        page.click(image_sel)
+        _safe_click(page, image_sel, emit, timeout=15000)
     except Exception as e:
         if emit:
             emit(f"  ⚠ 刷新验证码图失败: {e}", "warn")
@@ -713,7 +849,7 @@ def refresh_captcha_image(page, image_sel, emit):
             if emit:
                 emit(f"  [换图] 延 1s 后 src 仍未变化，再点一次")
             try:
-                page.click(image_sel)
+                _safe_click(page, image_sel, emit, timeout=15000)
                 time.sleep(0.5)
             except Exception as e:
                 if emit:
@@ -741,9 +877,14 @@ def close_captcha_modal(page, emit):
         result = page.evaluate("""() => {
             let clickedClose = 0;
             // 1. 优先模拟点击 Bootstrap close button —— 走正常关闭流程，状态机正确流转
-            const closeBtn = document.querySelector(
+            let closeBtn = document.querySelector(
                 '.modal.show .close, .modal.show [data-dismiss="modal"], .modal.show [data-bs-dismiss="modal"]'
             );
+            if (!closeBtn) {
+                // 2. 选择器没匹配到 → 按按钮文字找（"确定/关闭/知道了/OK"等），照样模拟点击关闭
+                const btns = Array.from(document.querySelectorAll('.modal.show button, .modal.show .btn'));
+                closeBtn = btns.find(b => /关闭|确定|知道了|好的|确认|ok|close|cancel/i.test((b.textContent || '').trim())) || null;
+            }
             if (closeBtn) {
                 closeBtn.click();
                 clickedClose = 1;
@@ -773,6 +914,54 @@ def close_captcha_modal(page, emit):
         if emit:
             emit(f"  ⚠ 关弹窗异常: {e}", "warn")
 
+def _modal_visible(page):
+    """页面是否有可见 Bootstrap 弹窗（modal.show）"""
+    try:
+        return bool(page.evaluate("() => !!document.querySelector('.modal.show, .modal.fade.show')"))
+    except Exception:
+        return False
+
+def _close_modal_if_any(page, emit):
+    """识别到弹窗挡住操作 → 立即模拟点击关闭。返回是否处理过弹窗。"""
+    try:
+        if not _modal_visible(page):
+            return False
+    except Exception:
+        return False
+    close_captcha_modal(page, emit)
+    return True
+
+def _safe_click(page, selector, emit, timeout=15000):
+    """点击前先关弹窗；被弹窗挡 → 关掉重试；按钮禁用（页面卡 loading）→ 刷新页面重试（上限 MAX_PAGE_RELOADS 次）"""
+    for _i in range(MAX_PAGE_RELOADS + 1):
+        _close_modal_if_any(page, emit)
+        try:
+            page.click(selector, timeout=timeout)
+            return
+        except Exception as e:
+            msg = str(e)
+            if "intercepts pointer events" in msg:
+                # 弹窗挡住 → 上面已尝试关，再试一次
+                if _close_modal_if_any(page, emit):
+                    time.sleep(0.3)
+                    continue
+                raise
+            if "element is not enabled" in msg:
+                # 按钮禁用（proxy-btn-loading 等页面卡加载）→ 刷新整个页面重试
+                captcha_ctx["page_reloads"] += 1
+                if captcha_ctx["page_reloads"] > MAX_PAGE_RELOADS:
+                    raise
+                if emit:
+                    emit(f"  ⚠ 按钮 {selector} 禁用（页面可能卡加载），刷新页面重试（第 {captcha_ctx['page_reloads']}/{MAX_PAGE_RELOADS} 次）", "warn")
+                try:
+                    page.reload(wait_until="commit")
+                except Exception:
+                    pass
+                time.sleep(1.5)
+                continue
+            raise
+
+
 def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
     """C. 多结果选最优：原图 + 二值化各 OCR 一次，挑 4-5 位字母数字
     返回 (text, method)，没合适就返回第一个结果（标记为 suspect）
@@ -793,6 +982,25 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
             break
         except Exception as e:
             total_waits += 1
+            # 页面没加载好（验证码图 src 为空）→ 刷新整个页面重试（最多 MAX_PAGE_RELOADS 次）
+            try:
+                _src_empty = not (page.eval_on_selector(image_sel, "el => el.getAttribute('src') || ''") or "")
+            except Exception:
+                _src_empty = False
+            if _src_empty:
+                captcha_ctx["page_reloads"] += 1
+                if captcha_ctx["page_reloads"] > MAX_PAGE_RELOADS:
+                    emit(f"  ✗ 刷新页面 {MAX_PAGE_RELOADS} 次验证码图仍为空，放弃本次 OCR", "error")
+                    return None, None
+                emit(f"  ⚠ 验证码图 src 为空（页面未加载完整），刷新页面重试（第 {captcha_ctx['page_reloads']}/{MAX_PAGE_RELOADS} 次）", "warn")
+                try:
+                    page.reload(wait_until="commit")
+                except Exception:
+                    pass
+                time.sleep(1.5)
+                total_waits = 0
+                click_retry = 0
+                continue
             if total_waits < 3:
                 emit(f"  ⚠ 验证码图未加载完成（naturalWidth=0），延 1s 再等（第 {total_waits}/3 次）", "warn")
                 time.sleep(1.0)
@@ -802,7 +1010,7 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
                     click_retry += 1
                     emit(f"  ⚠ 验证码图 3 次 wait 未加载，点击图刷新（第 {click_retry}/{MAX_CLICK_RETRY} 次）", "warn")
                     try:
-                        page.click(image_sel)
+                        _safe_click(page, image_sel, emit, timeout=15000)
                     except Exception as ce:
                         emit(f"  ✗ 点击图刷新失败: {ce}", "error")
                         break
@@ -819,27 +1027,16 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
     except Exception as e:
         emit(f"  ✗ 截验证码失败: {e}", "error")
         return None, None
-    # 两个候选
-    candidates = []  # [(text, method)]
-    text_orig = do_ocr_once(img_bytes)
-    if text_orig is not None:
-        candidates.append((text_orig, "原图"))
-    bin_bytes = preprocess_captcha_image(img_bytes)
-    if bin_bytes is not None:
-        text_bin = do_ocr_once(bin_bytes)
-        if text_bin is not None:
-            candidates.append((text_bin, "二值化"))
-    if not candidates:
+    # 多候选 OCR：原图/灰度/二值化/去噪 → 4-5 位长度校验 + 一致性投票
+    text, method = ocr_with_variants(img_bytes, emit)
+    if text is None:
         emit("  ✗ OCR 全部失败", "error")
         return None, None
-    # 选最优（4-5 位字母数字）
-    good = [(t, m) for t, m in candidates if is_valid_captcha_text(t)]
-    if good:
-        text, method = good[0]
+    if is_valid_captcha_text(text):
         emit(f"  ✓ OCR 识别 ({method}): {text}")
         return text, method
     # 没有 4-5 位的——按用户要求：刷图重试，最多 3 次
-    text_bad, method_bad = candidates[0]
+    text_bad, method_bad = text, method
     emit(f"  ⚠ OCR 识别 ({method_bad}) 长度异常: {text_bad}（期望 {CAPTCHA_MIN_LEN}-{CAPTCHA_MAX_LEN} 位），刷图重试", "warn")
     for retry_n in range(1, 4):  # 3 次刷图重试
         if not refresh_captcha_image(page, image_sel, emit):
@@ -850,23 +1047,13 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
         except Exception as e:
             emit(f"  ✗ 截验证码失败: {e}", "error")
             continue
-        cands2 = []
-        t_orig2 = do_ocr_once(img_bytes2)
-        if t_orig2 is not None:
-            cands2.append((t_orig2, "原图"))
-        bin2 = preprocess_captcha_image(img_bytes2)
-        if bin2 is not None:
-            t_bin2 = do_ocr_once(bin2)
-            if t_bin2 is not None:
-                cands2.append((t_bin2, "二值化"))
-        if not cands2:
+        text2, method2 = ocr_with_variants(img_bytes2, emit)
+        if text2 is None:
             continue
-        good2 = [(t, m) for t, m in cands2 if is_valid_captcha_text(t)]
-        if good2:
-            text, method = good2[0]
-            emit(f"  ✓ OCR 识别 ({method}): {text}（刷图 {retry_n} 次后成功）")
-            return text, method
-        text_bad, method_bad = cands2[0]
+        if is_valid_captcha_text(text2):
+            emit(f"  ✓ OCR 识别 ({method2}): {text2}（刷图 {retry_n} 次后成功）")
+            return text2, method2
+        text_bad, method_bad = text2, method2
         emit(f"  ⚠ 第 {retry_n} 次刷图后仍异常: {text_bad}（期望 {CAPTCHA_MIN_LEN}-{CAPTCHA_MAX_LEN} 位）", "warn")
     # 3 次都失败 —— 放弃本次，不让外层瞎填
     emit(f"  ✗ OCR 多次刷图后仍异常（{text_bad}），放弃本次", "error")
@@ -1724,7 +1911,7 @@ def do_op(page, op, account, cdk, emit):
 
     elif action == "click":
         page.wait_for_selector(selector, timeout=10000)
-        page.click(selector)
+        _safe_click(page, selector, emit, timeout=15000)
         emit(f"  ✓ 点击: {selector}")
         # A. 如果是 captcha 后的 click，自动检查验证码错误并重试（最多 3 次）
         if captcha_ctx["active"]:
@@ -1926,21 +2113,35 @@ def run_job(job_id, config):
     log_q = queue.Queue()
 
     def emit(msg, level="info"):
-        item = {"time": time.time(), "msg": msg, "level": level}
+        _msg = str(msg)
+        item = {"time": time.time(), "msg": _msg, "level": level}
         with JOBS_LOCK:
             job = JOBS.get(job_id)
             if not job: return
             job["log"].append(item)
-        print(f"[{job_id[:8]}] {msg}", flush=True)
+            # 日志增强：错误级/含"错误|失败"关键词的日志，若正处异常块则附带完整 traceback，方便排查
+            if level == "error" or ("错误" in _msg) or ("失败" in _msg):
+                _ei = sys.exc_info()
+                if _ei and _ei[0] is not None:
+                    import traceback as _tb
+                    _full = _tb.format_exception(*_ei)
+                    _joined = "".join(_full).strip()
+                    if _joined and _joined not in _msg:
+                        job["log"].append({"time": time.time(), "msg": "\n" + _joined, "level": "error"})
+                        print(f"[{job_id[:8]}] {_joined}", flush=True)
+        print(f"[{job_id[:8]}] {_msg}", flush=True)
         # 唤醒 SSE 等待的客户端
         with job["cond"]:
             job["cond"].notify_all()
 
     def th():
+        _tls.ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "method_hits": {}}
         try:
             _run_job_impl(job_id, config, emit)
+            _finalize_ocr_stats(emit)
         except Exception as e:
             import traceback
+            _finalize_ocr_stats(emit)
             emit(f"✗ 异常: {e}", "error")
             emit(traceback.format_exc(), "error")
             JOBS[job_id]["status"] = "error"
@@ -2322,6 +2523,7 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         # 每账号开始前重置验证码状态
                         captcha_ctx["last_result"] = None
                         captcha_ctx["attempts"] = 0
+                        captcha_ctx["page_reloads"] = 0
                         captcha_ctx["active"] = False
                         _check_pause(job_id, emit)
                         _check_cancel(job_id, emit)
@@ -2361,25 +2563,40 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                             if not page_obj.get("actions"):
                                 emit("  (未配置领取页操作，跳过)", "warn")
                             else:
-                                try:
-                                    # claim 默认 autoGoto=False（不跳转，登录后已在那）
-                                    if page_obj.get("autoGoto", False):
-                                        target = page_obj.get("urlPattern", "")
-                                        if target:
-                                            if not target.startswith("http"):
-                                                target = "https://" + domain + target
-                                            page.goto(target, timeout=30000, wait_until="commit")
-                                            emit(f"  打开: {target}")
-                                        else:
-                                            emit("  (claim 设了 autoGoto 但没配 urlPattern，跳过 goto)", "warn")
-                                    # 不管跳不跳，都跑动作
-                                    for op in page_obj.get("actions", []):
-                                        _check_pause(job_id, emit)
-                                        _check_cancel(job_id, emit)
-                                        do_op(page, op, acc, None, emit)
-                                    time.sleep(0.5)
-                                except Exception as e:
-                                    emit(f"  ✗ 领取失败: {e}", "error")
+                                # 领取页 #giftServer 等不到 → 刷新页面重试，最多 3 次
+                                for _try_n in range(1, 4):
+                                    try:
+                                        # claim 默认 autoGoto=False（不跳转，登录后已在那）
+                                        if page_obj.get("autoGoto", False):
+                                            target = page_obj.get("urlPattern", "")
+                                            if target:
+                                                if not target.startswith("http"):
+                                                    target = "https://" + domain + target
+                                                page.goto(target, timeout=30000, wait_until="commit")
+                                                emit(f"  打开: {target}")
+                                            else:
+                                                emit("  (claim 设了 autoGoto 但没配 urlPattern，跳过 goto)", "warn")
+                                        # 不管跳不跳，都跑动作
+                                        for op in page_obj.get("actions", []):
+                                            _check_pause(job_id, emit)
+                                            _check_cancel(job_id, emit)
+                                            do_op(page, op, acc, None, emit)
+                                        time.sleep(0.5)
+                                        break
+                                    except Exception as e:
+                                        if "#giftServer" in str(e) and _try_n < 3:
+                                            try:
+                                                page.reload(wait_until="commit")
+                                            except Exception:
+                                                pass
+                                            emit(f"  ⚠ 领取页 #giftServer 等不到（第 {_try_n}/3 次），已刷新页面重试", "warn")
+                                            time.sleep(1)
+                                            continue
+                                        emit(f"  ✗ 领取失败: {e}", "error")
+                                        # 刷新 3 次仍等不到 #giftServer → 跟验证码错误一样进下一轮重试
+                                        if "#giftServer" in str(e):
+                                            captcha_ctx["last_result"] = "failure"
+                                        break
                                 done += 1
 
                         if "cdk" in run_targets:
@@ -2845,7 +3062,8 @@ class Handler(BaseHTTPRequestHandler):
                 cycle = db_get_cdk_cycle(ga, region)
                 self._json(200, {"ok": True, "username": ga, "region": region,
                                  "cdk_daily": codes["daily"], "cdk_weekly": codes["weekly"], "cdk_monthly": codes["monthly"],
-                                 "weekly_start": cycle.get("weekly_start", ""), "monthly_start": cycle.get("monthly_start", "")})
+                                 "weekly_start": cycle.get("weekly_start", ""), "monthly_start": cycle.get("monthly_start", ""),
+                                 "weekly_next": cycle.get("weekly_next", ""), "monthly_next": cycle.get("monthly_next", "")})
             elif self.path == '/api/cdk-schedule/update':
                 # 要求3：修改账号的 CDK 码与周/月起始时间（覆盖式，需密码校验）
                 body = self._read_body()
@@ -2862,12 +3080,14 @@ class Handler(BaseHTTPRequestHandler):
                                             _d if isinstance(_d, str) else None,
                                             _w if isinstance(_w, str) else None,
                                             _m if isinstance(_m, str) else None)
-                cycle = db_set_cdk_cycle(ga, region,
-                                         _ws if isinstance(_ws, str) else None,
-                                         _ms if isinstance(_ms, str) else None)
+                db_set_cdk_cycle(ga, region,
+                                 _ws if isinstance(_ws, str) else None,
+                                 _ms if isinstance(_ms, str) else None)
+                cycle = db_get_cdk_cycle(ga, region)
                 self._json(200, {"ok": True, "username": ga, "region": region,
                                  "cdk_daily": codes["daily"], "cdk_weekly": codes["weekly"], "cdk_monthly": codes["monthly"],
-                                 "weekly_start": cycle.get("weekly_start", ""), "monthly_start": cycle.get("monthly_start", "")})
+                                 "weekly_start": cycle.get("weekly_start", ""), "monthly_start": cycle.get("monthly_start", ""),
+                                 "weekly_next": cycle.get("weekly_next", ""), "monthly_next": cycle.get("monthly_next", "")})
             elif self.path == '/api/cdks':
                 # 添加 CDK（前端如有用到）
                 body = self._read_body()
@@ -3285,6 +3505,41 @@ def cdk_cli(args):
     return 1
 
 
+def stats_cli(args):
+    """python ocr_server.py stats [n]：查看验证码识别统计（默认最近一次 + 最近 5 条历史）"""
+    n = 5
+    if args:
+        try:
+            n = max(1, int(args[0]))
+        except Exception:
+            pass
+    try:
+        with open(OCR_STATS_FILE, encoding="utf-8") as f:
+            last = json.load(f)
+        print("最近一次验证码识别统计：")
+        print(f"  时间:     {last.get('time', '')}")
+        print(f"  成功率:   {last.get('rate')}%  （{last.get('ok')}/{last.get('total')}）")
+        print(f"  全失败:   {last.get('allfail')}   长度异常: {last.get('badlen')}")
+        print(f"  方法命中: {json.dumps(last.get('method_hits', {}), ensure_ascii=False)}")
+    except FileNotFoundError:
+        print("还没有统计记录（先跑一轮任务，任务结束自动落盘）")
+    except Exception as e:
+        print("读取统计失败:", e)
+    try:
+        lines = [l for l in open(OCR_STATS_HISTORY_FILE, encoding="utf-8") if l.strip()]
+        if lines:
+            print(f"\n最近 {min(n, len(lines))} 次历史记录：")
+            for l in lines[-n:]:
+                try:
+                    d = json.loads(l)
+                    print(f"  {d.get('time', '')}  成功率 {d.get('rate')}%  ({d.get('ok')}/{d.get('total')})  全失败 {d.get('allfail')}  长度异常 {d.get('badlen')}")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return 0
+
+
 def concurrency_cli(args):
     """并发数子命令：cc 查看 / cc <数字> 设置（默认 3）"""
     if args and args[0] in ("help", "-h", "--help"):
@@ -3364,6 +3619,8 @@ if __name__ == '__main__':
         sys.exit(account_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "cc":
         sys.exit(concurrency_cli(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] == "stats":
+        sys.exit(stats_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "now":
         sys.exit(run_now_cli(sys.argv[2:]))
     main()
