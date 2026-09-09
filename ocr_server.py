@@ -109,6 +109,51 @@ DB_FILE = os.path.join(_DATA_DIR, "autofill.db")
 # 验证码识别统计：最近一次 + 历史追加（任务结束落盘，前端断联也能查）
 OCR_STATS_FILE = os.path.join(_DATA_DIR, "ocr_stats.json")
 OCR_STATS_HISTORY_FILE = os.path.join(_DATA_DIR, "ocr_stats_history.jsonl")
+# 任务独立日志目录：logs/<任务建立时间>_<任务id前8位>.log，启动时清理 7 天前的
+LOG_DIR = os.path.join(_DATA_DIR, "logs")
+LOG_RETENTION_DAYS = 7
+
+def _new_job_log_path(job_id):
+    try:
+        return os.path.join(LOG_DIR, time.strftime("%Y%m%d_%H%M%S") + "_" + str(job_id)[:8] + ".log")
+    except Exception:
+        return None
+
+def _init_log_dir():
+    """启动/CLI 时确保目录存在，并清理超过保留天数的旧任务日志"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        now = time.time()
+        for fn in os.listdir(LOG_DIR):
+            if not fn.endswith(".log"):
+                continue
+            p = os.path.join(LOG_DIR, fn)
+            try:
+                if now - os.path.getmtime(p) > LOG_RETENTION_DAYS * 86400:
+                    os.remove(p)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+def _job_log_append(job_id, msg, level="info"):
+    """把任务日志追加到该任务独立文件（带时间戳；写失败不影响任务）"""
+    try:
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            if not job:
+                return
+            path = job.get("logPath")
+        if not path:
+            return
+        ts = time.strftime("[%H:%M:%S] ")
+        tag = ("[" + level + "] ") if level and level != "info" else ""
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(ts + tag + str(msg) + "\n")
+    except Exception:
+        pass
+
+_init_log_dir()
 
 # ---------- 运行设置（并发数等，命令 cc 管理） ----------
 SETTINGS_FILE = os.path.join(_DATA_DIR, "autofill_settings.json")
@@ -2116,6 +2161,7 @@ def run_job(job_id, config):
     JOBS[job_id] = {
         "status": "running",
         "log": [],
+        "logPath": _new_job_log_path(job_id),   # 任务独立日志文件
         "result": None,
         "started": time.time(),
         "cond": threading.Condition(),   # SSE 推送用：emit 时 notify
@@ -2130,11 +2176,11 @@ def run_job(job_id, config):
 
     def emit(msg, level="info"):
         _msg = str(msg)
-        item = {"time": time.time(), "msg": _msg, "level": level}
+        extra = None
         with JOBS_LOCK:
             job = JOBS.get(job_id)
             if not job: return
-            job["log"].append(item)
+            job["log"].append({"time": time.time(), "msg": _msg, "level": level})
             # 日志增强：错误级/含"错误|失败"关键词的日志，若正处异常块则附带完整 traceback，方便排查
             if level == "error" or ("错误" in _msg) or ("失败" in _msg):
                 _ei = sys.exc_info()
@@ -2144,8 +2190,14 @@ def run_job(job_id, config):
                     _joined = "".join(_full).strip()
                     if _joined and _joined not in _msg:
                         job["log"].append({"time": time.time(), "msg": "\n" + _joined, "level": "error"})
-                        print(f"[{job_id[:8]}] {_joined}", flush=True)
+                        extra = _joined
         print(f"[{job_id[:8]}] {_msg}", flush=True)
+        if extra:
+            print(f"[{job_id[:8]}] {extra}", flush=True)
+        # 任务独立日志文件（锁外写，避免死锁/阻塞）
+        _job_log_append(job_id, _msg, level)
+        if extra:
+            _job_log_append(job_id, extra, "error")
         # 唤醒 SSE 等待的客户端
         with job["cond"]:
             job["cond"].notify_all()
@@ -2218,6 +2270,7 @@ def _scheduler_loop():
                     JOBS[jid] = {
                         "status": "running",
                         "log": [],
+                        "logPath": _new_job_log_path(jid),   # 任务独立日志文件
                         "result": None,
                         "started": time.time(),
                         "cond": threading.Condition(),
@@ -2239,6 +2292,7 @@ def _scheduler_loop():
                                     if not job: return
                                     job["log"].append(item)
                                 print(f"[{jid[:8]}] {msg}", flush=True)
+                                _job_log_append(jid, msg, level)
                                 with job["cond"]:
                                     job["cond"].notify_all()
                             _run_job_impl(jid, cfg_to_run, _emit)
@@ -3625,9 +3679,9 @@ def run_now_cli(args):
         return 1
     jid = uuid.uuid4().hex
     JOBS[jid] = {
-        "status": "running", "log": [], "result": None, "started": time.time(),
-        "cond": threading.Condition(), "last_index": 0, "subscribers": 0,
-        "updatedConfig": None, "paused": False, "cancel_requested": False,
+        "status": "running", "log": [], "logPath": _new_job_log_path(jid), "result": None,
+        "started": time.time(), "cond": threading.Condition(), "last_index": 0,
+        "subscribers": 0, "updatedConfig": None, "paused": False, "cancel_requested": False,
         "trigger": "now",
     }
     def _emit(msg, level="info"):
@@ -3636,6 +3690,7 @@ def run_now_cli(args):
             if job:
                 job["log"].append({"time": time.time(), "msg": msg, "level": level})
         print(msg, flush=True)
+        _job_log_append(jid, msg, level)
         with JOBS[jid]["cond"]:
             JOBS[jid]["cond"].notify_all()
     print("⏰ 手动执行定时任务（同凌晨 00:05 的全部自动化）", flush=True)
