@@ -1569,6 +1569,40 @@ def _account_active_cdks(acc, region, global_active):
             out.append(c)
     return out
 
+def _global_cdk_limited_by_next(acc, region, cdk, emit=None):
+    """全局池跑 CDK 前过滤（要求3增强）：若该码是账号的周/月码，且该账号该区命中过上限（有下次时间）且今天未到 → True（跳过）。
+    日码/一次性码/不是账号的周月码/未命中上限 → False（照跑）"""
+    if not cdk or cdk.get("schedule") == "once":
+        return False
+    code = str(cdk.get("code", "") or "").strip()
+    if not code:
+        return False
+    try:
+        username = acc.get("username", "?")
+        codes = db_get_account_cdks(username)
+        kind = None
+        if code == str(codes.get("weekly", "") or "").strip():
+            kind = "weekly"
+        elif code == str(codes.get("monthly", "") or "").strip():
+            kind = "monthly"
+        if not kind:
+            return False  # 不是该账号的周/月码，不受限
+        cyc = db_get_cdk_cycle(username, region or "")
+        nx = (cyc.get(kind + "_next") or "").strip()
+        if not nx:
+            return False  # 没命中过上限，照跑
+        from datetime import date
+        try:
+            if date.today() < date.fromisoformat(nx):
+                if emit:
+                    emit(f"  ⏭ 跳过 {kind}CDK[{code[:10]}]：该账号已达上限，下次 {nx} 再跑")
+                return True
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
+
 def cdk_active_today(cdk):
     if cdk.get("used") and cdk.get("schedule") == "once":
         return False
@@ -2353,7 +2387,12 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                             if account_cdks_mode:
                                 unit_cdks = _account_active_cdks(acc, region, active_cdks)
                             else:
-                                unit_cdks = active_cdks
+                                # 全局池模式：该账号的周/月码若命中过上限且未到期 → 跳过（中间时间不再跑）
+                                unit_cdks = []
+                                for _c in active_cdks:
+                                    if _global_cdk_limited_by_next(acc, region, _c, emit):
+                                        continue
+                                    unit_cdks.append(_c)
                             for cdk in unit_cdks:
                                 _check_pause(job_id, emit)
                                 _check_cancel(job_id, emit)
