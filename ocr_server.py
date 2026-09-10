@@ -2576,9 +2576,21 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
     ACCOUNT_STALL_TIMEOUT = int(os.environ.get("ACCOUNT_STALL_TIMEOUT", "180") or "180")
     _stall = {"ts": time.time(), "killed": False, "timed_out": False, "lock": threading.Lock()}
     _orig_emit = emit
+    _cancel_raised = [False]
     def emit(msg, level="info"):
         with _stall["lock"]:
             _stall["ts"] = time.time()
+        # 取消检查：任何一步日志输出时若已请求取消 → 立即中断当前操作（防重入，避免 except 路径递归）
+        if not _cancel_raised[0]:
+            with JOBS_LOCK:
+                _j = JOBS.get(job_id)
+                if _j and _j.get("cancel_requested"):
+                    _cancel_raised[0] = True
+                    try:
+                        _orig_emit("⏹ 收到取消请求，正在停止当前操作...", "warn")
+                    except Exception:
+                        pass
+                    raise _JobCancelled()
         _orig_emit(msg, level)
 
     def _start_stall_watchdog(page_ref):
@@ -2617,7 +2629,11 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
     run_units = []
     for _acc in accounts:
         _regs = _acc.get("regions")
-        if isinstance(_regs, list) and _regs:
+        # 兼容旧账号：只有单字段 region（字符串）时也按区跑；两者都空 → 用页面配置默认值
+        if not isinstance(_regs, list) or not _regs:
+            _r0 = _acc.get("region")
+            _regs = [_r0] if _r0 else []
+        if _regs:
             for _r in _regs:
                 run_units.append({"account": _acc, "region": _normalize_region(str(_r))})
         else:
@@ -2931,7 +2947,10 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                     try:
                                         _act = db_upsert_account(_u, _p)
                                         _regs = acc.get("regions")
-                                        if isinstance(_regs, list) and _regs:
+                                        if not isinstance(_regs, list) or not _regs:
+                                            _r0 = acc.get("region")
+                                            _regs = [_r0] if _r0 else []
+                                        if _regs:
                                             db_add_account_regions(_u, _regs)
                                         emit(f"  ✓ 账号 {_u} 执行成功，已自动入库（下次执行直接走数据库配置）", "success")
                                     except Exception as _e:
@@ -3226,11 +3245,14 @@ class Handler(BaseHTTPRequestHandler):
                         self._sse_send({"type": "log", **item})
                     job["last_index"] = len(job["log"])
 
-                    if job["status"] in ("done", "error"):
+                    if job["status"] in ("done", "error", "cancelled"):
+                        _st = job["status"]
+                        _msg = "全部完成" if _st == "done" else ("执行失败" if _st == "error" else "任务已取消")
                         self._sse_send({
                             "type": "done",
-                            "ok": job["status"] == "done",
-                            "msg": "全部完成" if job["status"] == "done" else "执行失败",
+                            "ok": _st == "done",
+                            "cancelled": _st == "cancelled",
+                            "msg": _msg,
                             "updatedConfig": job.get("updatedConfig"),
                         })
                         try: self.wfile.flush()

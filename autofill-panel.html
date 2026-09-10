@@ -281,6 +281,12 @@
     .run-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
     #pauseBtn { background: #f59e0b; color: #fff; border-color: #f59e0b; }
     #pauseBtn:hover { background: #d97706; border-color: #d97706; }
+    .theme-btn {
+      background: #fff; color: #444; border: 1px solid var(--border);
+      border-radius: 10px; width: 36px; height: 36px; font-size: 17px;
+      cursor: pointer; padding: 0; line-height: 1; flex: 0 0 auto;
+    }
+    .theme-btn:hover { border-color: var(--primary); }
 
     /* ---------- 折叠面板（账号/区/CDK 查询类） ---------- */
     .query-box { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
@@ -330,7 +336,7 @@
       .card { padding: 13px; }
       table { font-size: 12px; }
       th, td { padding: 7px 8px; }
-      .table-wrap table { min-width: 540px; }
+      .table-wrap table { min-width: 640px; }
       .mobile-tip { display: block; }
       .qr-card { display: none; }
       .tabs { overflow-x: auto; flex-wrap: nowrap; }
@@ -358,80 +364,154 @@
     }
     .tab.active { color: var(--primary); border-bottom: 2px solid var(--primary); font-weight: 700; }
 
-    /* ---------- 深色模式 ---------- */
+    /* ---------- 深色模式（跟随系统 + 手动切换双驱动） ---------- */
     @media (prefers-color-scheme: dark) {
-      :root {
+      html:not([data-theme="light"]) {
         --bg: #0e1117; --card: #171b24; --text: #e3e8f0; --text-2: #a2adbd;
         --text-3: #6d7a8d; --border: #262e3d;
       }
-      body { background: linear-gradient(165deg, #0e1117 0%, #121722 50%, #141a26 100%); background-attachment: fixed; }
-      .app-header { background: rgba(18, 22, 30, .82); border-bottom-color: #232b3a; }
-      .brand-sub { color: #5f6c80; }
-      .header-domain { background: #18233a; border-color: #27406b; color: #a9c2ec; }
-      .header-domain code { color: #7aa7f5; }
-      .card { background: #171b24; border-color: #232b3a; }
-      .main-ops-card { background: linear-gradient(150deg, #1a1f2a 0%, #161d2c 70%, #151b29 100%); border-color: #24304a; }
-      .region-field label { color: #a2adbd; }
-      .region-field input { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
-      .region-field input:focus { border-color: #5b8ef7; box-shadow: 0 0 0 4px rgba(91, 142, 247, .18); }
-      .region-hint { color: #5f6c80; }
-      .run-opts { border-top-color: #2a3345; }
-      .run-opts label { color: #a2adbd; }
-      .opts-label { color: #5f6c80; }
-      .opts-sep { color: #33405a; }
-      .opt-pill { background: #1d2330; border-color: #2c3648; }
-      .opt-pill:hover { border-color: #3d4d6e; }
-      input, textarea, select { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
-      button { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
-      button:hover { background: #273042; }
-      button.primary { background: var(--brand-grad); color: #fff; }
-      button.danger { color: #ff8a80; border-color: #6e3234; background: #20181d; }
-      button.danger:hover { background: #2a1c20; }
-      .ghost-btn { background: transparent; border-color: transparent; color: #8b97a8; }
-      .ghost-btn:hover { background: #232b3a; }
-      th, td { border-color: #232b3a; }
-      th { background: #1d2330; color: #b9c6da; }
-      tbody tr:nth-child(odd) td { background: #191f2a; }
-      tbody tr:hover td { background: #1e2736; }
-      .action { background: #1a1f2a; border-color: #262e3d; }
-      .action:hover { border-color: #3a4a6a; }
-      .action-type { color: #7aa7f5; }
-      .op-move { background: #18233a; color: #7aa7f5; border-color: #27406b; }
-      .op-move:hover { background: #1e2d4e; }
-      .insert-bar { border-top-color: #262e3d; }
-      .insert-bar button { background: #33290f; border-color: #66521f; color: #f5b942; }
-      .insert-bar button:hover { background: #4a3c16; }
-      .sel-row { background: #1d2330; }
-      .sel-row .sel-use { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
-      .pwd-tip, .mobile-tip { background: #33290f; border-color: #66521f; color: #e8c76a; }
-      .pwd-tip b, .mobile-tip b { color: #ffab91; }
-      .domain-tag { background: #18233a; }
-      .domain-tag code { color: #7aa7f5; }
-      .badge.daily { background: #1b2e24; color: #81c784; }
-      .badge.weekly { background: #18233a; color: #7aa7f5; }
-      .badge.monthly { background: #33290f; color: #f5b942; }
-      .badge.once { background: #2a1f33; color: #ce93d8; }
-      code.inline { background: #1f2532; color: #f48fb1; }
-      .cfg-drawer { background: #131722; box-shadow: -14px 0 44px rgba(0, 0, 0, .55); }
-      .cfg-drawer-head { background: #131722; border-bottom-color: #262e3d; }
-      .cfg-drawer-head b { color: #e3e8f0; }
-      .cfg-close { background: #1f2532; color: #a2adbd; }
-      .cfg-close:hover { background: #273042; }
-      .qr-card { background: linear-gradient(135deg, #18233a, #151d2e); border-color: #27406b; }
-      .qr-card .qr-text { color: #a9c2ec; }
-      .qr-card .qr-text code { background: #1f2532; color: #7aa7f5; }
-      .acct-batch { background: #1a1f2a; border-color: #2c3648; }
-      .query-result { background: #1a1f2a; border-color: #262e3d; }
-      .tag-chip { background: #18233a; color: #7aa7f5; }
-      .table-wrap { border-color: #232b3a; }
-      .msg.success { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
-      .msg.error { background: #331f24; color: #ef9a9a; border-color: #6e3234; }
-      .msg.info { background: #14273a; color: #7aa7f5; border-color: #27406b; }
-      .empty { color: #5f6c80; }
-      .saved-hint { color: #81c784; }
-      .tab { color: #8b97a8; }
-      .tab.active { color: #7aa7f5; border-bottom-color: #7aa7f5; }
+      html:not([data-theme="light"]) body { background: linear-gradient(165deg, #0e1117 0%, #121722 50%, #141a26 100%); background-attachment: fixed; }
+      html:not([data-theme="light"]) .app-header { background: rgba(18, 22, 30, .82); border-bottom-color: #232b3a; }
+      html:not([data-theme="light"]) .brand-sub { color: #5f6c80; }
+      html:not([data-theme="light"]) .header-domain { background: #18233a; border-color: #27406b; color: #a9c2ec; }
+      html:not([data-theme="light"]) .header-domain code { color: #7aa7f5; }
+      html:not([data-theme="light"]) .card { background: #171b24; border-color: #232b3a; }
+      html:not([data-theme="light"]) .main-ops-card { background: linear-gradient(150deg, #1a1f2a 0%, #161d2c 70%, #151b29 100%); border-color: #24304a; }
+      html:not([data-theme="light"]) .region-field label { color: #a2adbd; }
+      html:not([data-theme="light"]) .region-field input { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      html:not([data-theme="light"]) .region-field input:focus { border-color: #5b8ef7; box-shadow: 0 0 0 4px rgba(91, 142, 247, .18); }
+      html:not([data-theme="light"]) .region-hint { color: #5f6c80; }
+      html:not([data-theme="light"]) .run-opts { border-top-color: #2a3345; }
+      html:not([data-theme="light"]) .run-opts label { color: #a2adbd; }
+      html:not([data-theme="light"]) .opts-label { color: #5f6c80; }
+      html:not([data-theme="light"]) .opts-sep { color: #33405a; }
+      html:not([data-theme="light"]) .opt-pill { background: #1d2330; border-color: #2c3648; }
+      html:not([data-theme="light"]) .opt-pill:hover { border-color: #3d4d6e; }
+      html:not([data-theme="light"]) input, textarea, select { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      html:not([data-theme="light"]) button { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      html:not([data-theme="light"]) button:hover { background: #273042; }
+      html:not([data-theme="light"]) button.primary { background: var(--brand-grad); color: #fff; }
+      html:not([data-theme="light"]) button.danger { color: #ff8a80; border-color: #6e3234; background: #20181d; }
+      html:not([data-theme="light"]) button.danger:hover { background: #2a1c20; }
+      html:not([data-theme="light"]) .ghost-btn { background: transparent; border-color: transparent; color: #8b97a8; }
+      html:not([data-theme="light"]) .ghost-btn:hover { background: #232b3a; }
+      html:not([data-theme="light"]) th, td { border-color: #232b3a; }
+      html:not([data-theme="light"]) th { background: #1d2330; color: #b9c6da; }
+      html:not([data-theme="light"]) tbody tr:nth-child(odd) td { background: #191f2a; }
+      html:not([data-theme="light"]) tbody tr:hover td { background: #1e2736; }
+      html:not([data-theme="light"]) .action { background: #1a1f2a; border-color: #262e3d; }
+      html:not([data-theme="light"]) .action:hover { border-color: #3a4a6a; }
+      html:not([data-theme="light"]) .action-type { color: #7aa7f5; }
+      html:not([data-theme="light"]) .op-move { background: #18233a; color: #7aa7f5; border-color: #27406b; }
+      html:not([data-theme="light"]) .op-move:hover { background: #1e2d4e; }
+      html:not([data-theme="light"]) .insert-bar { border-top-color: #262e3d; }
+      html:not([data-theme="light"]) .insert-bar button { background: #33290f; border-color: #66521f; color: #f5b942; }
+      html:not([data-theme="light"]) .insert-bar button:hover { background: #4a3c16; }
+      html:not([data-theme="light"]) .sel-row { background: #1d2330; }
+      html:not([data-theme="light"]) .sel-row .sel-use { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      html:not([data-theme="light"]) .pwd-tip, .mobile-tip { background: #33290f; border-color: #66521f; color: #e8c76a; }
+      html:not([data-theme="light"]) .pwd-tip b, .mobile-tip b { color: #ffab91; }
+      html:not([data-theme="light"]) .domain-tag { background: #18233a; }
+      html:not([data-theme="light"]) .domain-tag code { color: #7aa7f5; }
+      html:not([data-theme="light"]) .badge.daily { background: #1b2e24; color: #81c784; }
+      html:not([data-theme="light"]) .badge.weekly { background: #18233a; color: #7aa7f5; }
+      html:not([data-theme="light"]) .badge.monthly { background: #33290f; color: #f5b942; }
+      html:not([data-theme="light"]) .badge.once { background: #2a1f33; color: #ce93d8; }
+      html:not([data-theme="light"]) code.inline { background: #1f2532; color: #f48fb1; }
+      html:not([data-theme="light"]) .cfg-drawer { background: #131722; box-shadow: -14px 0 44px rgba(0, 0, 0, .55); }
+      html:not([data-theme="light"]) .cfg-drawer-head { background: #131722; border-bottom-color: #262e3d; }
+      html:not([data-theme="light"]) .cfg-drawer-head b { color: #e3e8f0; }
+      html:not([data-theme="light"]) .cfg-close { background: #1f2532; color: #a2adbd; }
+      html:not([data-theme="light"]) .cfg-close:hover { background: #273042; }
+      html:not([data-theme="light"]) .qr-card { background: linear-gradient(135deg, #18233a, #151d2e); border-color: #27406b; }
+      html:not([data-theme="light"]) .qr-card .qr-text { color: #a9c2ec; }
+      html:not([data-theme="light"]) .qr-card .qr-text code { background: #1f2532; color: #7aa7f5; }
+      html:not([data-theme="light"]) .acct-batch { background: #1a1f2a; border-color: #2c3648; }
+      html:not([data-theme="light"]) .query-result { background: #1a1f2a; border-color: #262e3d; }
+      html:not([data-theme="light"]) .tag-chip { background: #18233a; color: #7aa7f5; }
+      html:not([data-theme="light"]) .table-wrap { border-color: #232b3a; }
+      html:not([data-theme="light"]) .msg.success { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      html:not([data-theme="light"]) .msg.error { background: #331f24; color: #ef9a9a; border-color: #6e3234; }
+      html:not([data-theme="light"]) .msg.info { background: #14273a; color: #7aa7f5; border-color: #27406b; }
+      html:not([data-theme="light"]) .empty { color: #5f6c80; }
+      html:not([data-theme="light"]) .saved-hint { color: #81c784; }
+      html:not([data-theme="light"]) .tab { color: #8b97a8; }
+      html:not([data-theme="light"]) .tab.active { color: #7aa7f5; border-bottom-color: #7aa7f5; }
     }
+    
+      html[data-theme="dark"] {
+        --bg: #0e1117; --card: #171b24; --text: #e3e8f0; --text-2: #a2adbd;
+        --text-3: #6d7a8d; --border: #262e3d;
+      }
+      html[data-theme="dark"] body { background: linear-gradient(165deg, #0e1117 0%, #121722 50%, #141a26 100%); background-attachment: fixed; }
+      html[data-theme="dark"] .app-header { background: rgba(18, 22, 30, .82); border-bottom-color: #232b3a; }
+      html[data-theme="dark"] .brand-sub { color: #5f6c80; }
+      html[data-theme="dark"] .header-domain { background: #18233a; border-color: #27406b; color: #a9c2ec; }
+      html[data-theme="dark"] .header-domain code { color: #7aa7f5; }
+      html[data-theme="dark"] .card { background: #171b24; border-color: #232b3a; }
+      html[data-theme="dark"] .main-ops-card { background: linear-gradient(150deg, #1a1f2a 0%, #161d2c 70%, #151b29 100%); border-color: #24304a; }
+      html[data-theme="dark"] .region-field label { color: #a2adbd; }
+      html[data-theme="dark"] .region-field input { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      html[data-theme="dark"] .region-field input:focus { border-color: #5b8ef7; box-shadow: 0 0 0 4px rgba(91, 142, 247, .18); }
+      html[data-theme="dark"] .region-hint { color: #5f6c80; }
+      html[data-theme="dark"] .run-opts { border-top-color: #2a3345; }
+      html[data-theme="dark"] .run-opts label { color: #a2adbd; }
+      html[data-theme="dark"] .opts-label { color: #5f6c80; }
+      html[data-theme="dark"] .opts-sep { color: #33405a; }
+      html[data-theme="dark"] .opt-pill { background: #1d2330; border-color: #2c3648; }
+      html[data-theme="dark"] .opt-pill:hover { border-color: #3d4d6e; }
+      html[data-theme="dark"] input, textarea, select { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      html[data-theme="dark"] button { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      html[data-theme="dark"] button:hover { background: #273042; }
+      html[data-theme="dark"] button.primary { background: var(--brand-grad); color: #fff; }
+      html[data-theme="dark"] button.danger { color: #ff8a80; border-color: #6e3234; background: #20181d; }
+      html[data-theme="dark"] button.danger:hover { background: #2a1c20; }
+      html[data-theme="dark"] .ghost-btn { background: transparent; border-color: transparent; color: #8b97a8; }
+      html[data-theme="dark"] .ghost-btn:hover { background: #232b3a; }
+      html[data-theme="dark"] th, td { border-color: #232b3a; }
+      html[data-theme="dark"] th { background: #1d2330; color: #b9c6da; }
+      html[data-theme="dark"] tbody tr:nth-child(odd) td { background: #191f2a; }
+      html[data-theme="dark"] tbody tr:hover td { background: #1e2736; }
+      html[data-theme="dark"] .action { background: #1a1f2a; border-color: #262e3d; }
+      html[data-theme="dark"] .action:hover { border-color: #3a4a6a; }
+      html[data-theme="dark"] .action-type { color: #7aa7f5; }
+      html[data-theme="dark"] .op-move { background: #18233a; color: #7aa7f5; border-color: #27406b; }
+      html[data-theme="dark"] .op-move:hover { background: #1e2d4e; }
+      html[data-theme="dark"] .insert-bar { border-top-color: #262e3d; }
+      html[data-theme="dark"] .insert-bar button { background: #33290f; border-color: #66521f; color: #f5b942; }
+      html[data-theme="dark"] .insert-bar button:hover { background: #4a3c16; }
+      html[data-theme="dark"] .sel-row { background: #1d2330; }
+      html[data-theme="dark"] .sel-row .sel-use { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      html[data-theme="dark"] .pwd-tip, .mobile-tip { background: #33290f; border-color: #66521f; color: #e8c76a; }
+      html[data-theme="dark"] .pwd-tip b, .mobile-tip b { color: #ffab91; }
+      html[data-theme="dark"] .domain-tag { background: #18233a; }
+      html[data-theme="dark"] .domain-tag code { color: #7aa7f5; }
+      html[data-theme="dark"] .badge.daily { background: #1b2e24; color: #81c784; }
+      html[data-theme="dark"] .badge.weekly { background: #18233a; color: #7aa7f5; }
+      html[data-theme="dark"] .badge.monthly { background: #33290f; color: #f5b942; }
+      html[data-theme="dark"] .badge.once { background: #2a1f33; color: #ce93d8; }
+      html[data-theme="dark"] code.inline { background: #1f2532; color: #f48fb1; }
+      html[data-theme="dark"] .cfg-drawer { background: #131722; box-shadow: -14px 0 44px rgba(0, 0, 0, .55); }
+      html[data-theme="dark"] .cfg-drawer-head { background: #131722; border-bottom-color: #262e3d; }
+      html[data-theme="dark"] .cfg-drawer-head b { color: #e3e8f0; }
+      html[data-theme="dark"] .cfg-close { background: #1f2532; color: #a2adbd; }
+      html[data-theme="dark"] .cfg-close:hover { background: #273042; }
+      html[data-theme="dark"] .qr-card { background: linear-gradient(135deg, #18233a, #151d2e); border-color: #27406b; }
+      html[data-theme="dark"] .qr-card .qr-text { color: #a9c2ec; }
+      html[data-theme="dark"] .qr-card .qr-text code { background: #1f2532; color: #7aa7f5; }
+      html[data-theme="dark"] .acct-batch { background: #1a1f2a; border-color: #2c3648; }
+      html[data-theme="dark"] .query-result { background: #1a1f2a; border-color: #262e3d; }
+      html[data-theme="dark"] .tag-chip { background: #18233a; color: #7aa7f5; }
+      html[data-theme="dark"] .table-wrap { border-color: #232b3a; }
+      html[data-theme="dark"] .msg.success { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      html[data-theme="dark"] .msg.error { background: #331f24; color: #ef9a9a; border-color: #6e3234; }
+      html[data-theme="dark"] .msg.info { background: #14273a; color: #7aa7f5; border-color: #27406b; }
+      html[data-theme="dark"] .empty { color: #5f6c80; }
+      html[data-theme="dark"] .saved-hint { color: #81c784; }
+      html[data-theme="dark"] .tab { color: #8b97a8; }
+      html[data-theme="dark"] .tab.active { color: #7aa7f5; border-bottom-color: #7aa7f5; }
+      html[data-theme="dark"] #runProgress { background: #0a0e15; border-color: #3a4a6a; color: #dbe7f7; }
+
   </style>
 </head>
 
@@ -447,6 +527,7 @@
     </div>
     <div class="header-right">
       <span class="header-domain">🌐 当前域名：<code id="currentDomain">未设置</code></span>
+      <button id="themeBtn" class="theme-btn" onclick="toggleTheme()" title="切换深浅色">🌙</button>
     </div>
   </header>
 
@@ -520,7 +601,7 @@
         <div class="table-wrap">
           <table id="accountTable">
             <thead>
-              <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
+              <tr><th>账号</th><th>密码</th><th>区</th><th>启用</th><th>操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -528,10 +609,11 @@
         <div class="acct-add-row">
           <input id="newAccountUser" placeholder="游戏账号" style="flex:1 1 160px;min-width:120px">
           <input id="newAccountPass" type="password" placeholder="游戏密码" style="flex:1 1 160px;min-width:120px">
+          <input id="newAccountRegion" placeholder="区（多个用顿号/逗号分隔，留空=六区）" style="flex:1 1 210px;min-width:140px">
           <button class="primary" id="addAccount">+ 添加账号</button>
         </div>
         <div class="acct-batch">
-          <div class="hint">批量导入（每行：<b>账号 密码</b>，可加第三列区，如 <code>123456 密码 六区</code>；留空区=当前区）</div>
+          <div class="hint">批量导入（每行：<b>账号 密码</b>，可加第三列区，多个区用顿号分隔，如 <code>123456 密码 六区、七区</code>；留空=六区）</div>
           <textarea id="batchAccountInput" rows="3" placeholder="每行一个账号&#10;user1 pass1 六区&#10;user2 pass2" style="width:100%;box-sizing:border-box;font-family:var(--mono);font-size:12px;resize:vertical"></textarea>
           <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <button class="primary" id="batchImportBtn">📥 批量导入</button>
@@ -942,7 +1024,7 @@
     function renderAccounts() {
       const tbody = $("accountTable").querySelector("tbody");
       if (currentConfig.accounts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty">还没有账号</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">还没有账号</td></tr>';
         return;
       }
       const kw = ($("accountSearch") && $("accountSearch").value || "").trim().toLowerCase();
@@ -952,6 +1034,7 @@
         `<tr>
           <td><input value="${esc(a.username)}" onchange="updAccount(${i},'username',this.value)"></td>
           <td><input type="password" value="${esc(a.password)}" onchange="updAccount(${i},'password',this.value)"></td>
+          <td>${((a.regions && a.regions.length) ? a.regions.map(esc).join("、") : (a.region ? esc(a.region) : '<span style="color:var(--text-3)">—</span>'))}</td>
           <td><input type="checkbox" ${a.enabled !== false ? "checked" : ""} onchange="updAccount(${i},'enabled',this.checked)"></td>
           <td><button class="danger" onclick="removeAccount(${i})">删除</button></td>
         </tr>`
@@ -960,39 +1043,32 @@
     $("accountSearch").addEventListener("input", renderAccounts);
 
     // 批量导入账号（串行入库，逻辑与单条添加一致：入库 + 本地列表）
-    $("batchImportBtn").onclick = async () => {
+    $("batchImportBtn").onclick = () => {
       const raw = $("batchAccountInput").value.trim();
       if (!raw) { showMsg("error", "请先粘贴账号（每行：账号 密码 区）"); return; }
       const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       if (!lines.length) { showMsg("error", "没有可导入的账号"); return; }
-      $("batchImportBtn").disabled = true;
-      $("batchImportStatus").textContent = "导入中…";
-      let ok = 0, fail = 0, firstErr = "";
+      let ok = 0, upd = 0;
       for (const line of lines) {
         const parts = line.split(/[\s,，]+/);
-        if (parts.length < 2) { fail++; firstErr = firstErr || "有行缺密码"; continue; }
-        const u = parts[0], p = parts[1], rg = (parts[2] || currentRegionValue());
-        try {
-          const d = await apiAddAccount(u, p, rg);
-          if (d.ok) {
-            ok++;
-            const idx = currentConfig.accounts.findIndex(a => a.username === u);
-            if (idx >= 0) currentConfig.accounts[idx].password = p;
-            else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: rg });
-          } else {
-            fail++; firstErr = firstErr || (d.error || "");
-          }
-        } catch (e) {
-          fail++; firstErr = firstErr || e.message;
+        if (parts.length < 2) continue;
+        const u = parts[0], p = parts[1];
+        const regions = parseRegionsInput(parts.slice(2).join("、"));
+        const idx = currentConfig.accounts.findIndex(a => a.username === u);
+        if (idx >= 0) {
+          currentConfig.accounts[idx].password = p;
+          currentConfig.accounts[idx].regions = regions;
+          currentConfig.accounts[idx].region = regions[0];
+          upd++;
+        } else {
+          currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, regions, region: regions[0] });
+          ok++;
         }
       }
       renderAccounts();
       persistLocalConfig();
-      syncConfigToServer();
-      $("batchImportBtn").disabled = false;
-      $("batchImportStatus").textContent = "";
-      if (fail > 0) showMsg("error", `批量导入完成：成功 ${ok} 条，失败 ${fail} 条` + (firstErr ? `（如：${firstErr}）` : ""));
-      else showMsg("success", `批量导入完成：成功 ${ok} 条`);
+      $("batchAccountInput").value = "";
+      showMsg("success", `批量导入完成：新增 ${ok} 条，更新 ${upd} 条（仅存本浏览器，首次执行成功后自动入库）`);
     };
 
     function updAccount(i, k, v) { currentConfig.accounts[i][k] = v; syncConfigToServer(); persistLocalConfig(); }
@@ -1259,36 +1335,28 @@
     }
 
     // 按钮事件
-    $("addAccount").onclick = async () => {
+    // 红线：添加账号只写本浏览器 localStorage（各浏览器绝不互通）；不入数据库。
+    // 首次执行成功后才由后端自动入库，之后每日定时任务才会跑该账号。
+    $("addAccount").onclick = () => {
       const u = $("newAccountUser").value.trim();
       const p = $("newAccountPass").value.trim();
       if (!u || !p) { showMsg("error", "请输入账号和密码"); return; }
-      $("addAccount").disabled = true;
-      $("addAccount").textContent = "添加中…";
-      // 上传到数据库（按账号去重）
-      try {
-        const d = await apiAddAccount(u, p, currentRegionValue());
-        if (d.ok) {
-          const actionMap = { insert: "已添加", update: "密码已更新", skip: "已存在" };
-          showMsg("success", `账号 ${u} ${actionMap[d.action] || "处理完成"}`);
-          // 也存到本地 currentConfig（只显示本机添加的）
-          const idx = currentConfig.accounts.findIndex(a => a.username === u);
-          if (idx >= 0) currentConfig.accounts[idx].password = p;
-          else currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, region: currentRegionValue() });
-          renderAccounts();
-          syncConfigToServer();
-          persistLocalConfig();  // 入库逻辑不变，额外存一份本浏览器，作为本机显示来源
-          $("newAccountUser").value = "";
-          $("newAccountPass").value = "";
-        } else {
-          showMsg("error", d.error || "添加失败");
-        }
-      } catch (e) {
-        showMsg("error", "网络错误：" + e.message);
-      } finally {
-        $("addAccount").disabled = false;
-        $("addAccount").textContent = "+ 添加账号";
+      const regions = parseRegionsInput($("newAccountRegion").value);
+      const idx = currentConfig.accounts.findIndex(a => a.username === u);
+      if (idx >= 0) {
+        currentConfig.accounts[idx].password = p;
+        currentConfig.accounts[idx].regions = regions;
+        currentConfig.accounts[idx].region = regions[0];
+        showMsg("success", `账号 ${u} 已更新（区：${regions.join("、")}）`);
+      } else {
+        currentConfig.accounts.push({ id: uid(), username: u, password: p, enabled: true, regions, region: regions[0] });
+        showMsg("success", `账号 ${u} 已添加（区：${regions.join("、")}）——首次执行成功后自动入库，之后每日定时任务会跑`);
       }
+      renderAccounts();
+      persistLocalConfig();
+      $("newAccountUser").value = "";
+      $("newAccountPass").value = "";
+      $("newAccountRegion").value = "";
     };
     // CDK 已改为后端管理（CLI），面板不再处理 addCdk
 
@@ -1374,10 +1442,16 @@
       return m ? numToCn(parseInt(m[1], 10)) + "区" : s;
     }
     function bindRegionNormalize() {
-      ["currentRegion", "regionNewInput", "cdkQueryRegion"].forEach(id => {
+      ["currentRegion", "regionNewInput", "cdkQueryRegion", "newAccountRegion"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.addEventListener("blur", () => { const nv = normalizeRegionText(el.value); if (nv !== el.value) el.value = nv; });
       });
+    }
+    function parseRegionsInput(v) {
+      // "六区、七区 八区,九区" → ["六区","七区","八区","九区"]；留空 → 默认 ["六区"]
+      const parts = String(v || "").split(/[\s,，、;；]+/).map(x => normalizeRegionText(x)).filter(Boolean);
+      if (!parts.length) return ["六区"];
+      return [...new Set(parts)];
     }
     function currentRegionValue() {
       const v = ($("currentRegion").value || "").trim();
@@ -1764,10 +1838,11 @@
           appendLog(d.level || "info", d.msg);
         } else if (d.type === "done") {
           appendLog(d.ok ? "success" : "error", (d.ok ? "✅ " : "✗ ") + (d.msg || ""));
-          $("runTitle").textContent = d.ok ? "✅ 完成" : "✗ 失败";
-          $("runTitle").style.color = d.ok ? "#2e7d32" : "#c62828";
+          $("runTitle").textContent = d.ok ? "✅ 完成" : (d.cancelled ? "⏹ 已取消" : "✗ 失败");
+          $("runTitle").style.color = d.ok ? "#2e7d32" : (d.cancelled ? "#e65100" : "#c62828");
           $("runHint").textContent = d.msg || (d.ok ? "全部完成" : "执行失败");
-          // 任务结束——重置按钮状态（不置灰，按钮一直可点）
+          // 任务结束——清空 jobId（再点暂停/取消会提示"没有正在运行的任务"），重置按钮状态
+          currentJobId = null;
           $("pauseBtn").textContent = "⏸ 暂停";
           $("pauseBtn").dataset.paused = "0";
           if (d.ok && d.updatedConfig && d.updatedConfig.cdkList) {
@@ -1797,8 +1872,13 @@
     }
 
     function appendLog(level, msg) {
-      const colors = { info: "#333", success: "#2e7d32", error: "#c62828", warn: "#e65100" };
-      const html = `<div style="color:${colors[level] || '#333'};margin-bottom:2px">[${new Date().toLocaleTimeString()}] ${escapeHtml(msg)}</div>`;
+      // 日志级别色按当前主题取（浅色/深色下都清晰可读）
+      const isDark = document.documentElement.dataset.theme === "dark" ||
+        (document.documentElement.dataset.theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      const colors = isDark
+        ? { info: "#c9d6ea", success: "#81c784", error: "#ff8a80", warn: "#ffb74d" }
+        : { info: "#333", success: "#2e7d32", error: "#c62828", warn: "#e65100" };
+      const html = `<div style="color:${colors[level] || colors.info};margin-bottom:2px">[${new Date().toLocaleTimeString()}] ${escapeHtml(msg)}</div>`;
       $("runProgress").insertAdjacentHTML("beforeend", html);
       if ($("logAutoScroll") && $("logAutoScroll").checked) {
         $("runProgress").scrollTop = $("runProgress").scrollHeight;
@@ -1873,14 +1953,33 @@
         const resp = await fetch(SERVER + "/jobs/" + currentJobId + "/cancel", { method: "POST" });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || "HTTP " + resp.status);
-        appendLog("warn", "⏹ 已请求取消");
+        appendLog("warn", "⏹ 已请求取消，正在停止当前操作...");
       } catch (err) {
         showMsg("error", "取消失败: " + err.message);
       }
     };
 
+    // 手动深浅色切换（各浏览器独立记忆，默认跟随系统）
+    const THEME_KEY = "ocr_theme_v1";
+    function applyTheme() {
+      let m = "auto";
+      try { m = localStorage.getItem(THEME_KEY) || "auto"; } catch {}
+      if (!["auto", "light", "dark"].includes(m)) m = "auto";
+      document.documentElement.dataset.theme = m;
+      const btn = document.getElementById("themeBtn");
+      if (btn) btn.textContent = m === "dark" ? "☀️" : "🌙";
+    }
+    function toggleTheme() {
+      const m = document.documentElement.dataset.theme || "auto";
+      const next = m === "dark" ? "light" : (m === "light" ? "auto" : "dark");
+      try { localStorage.setItem(THEME_KEY, next); } catch {}
+      applyTheme();
+      showMsg("info", next === "auto" ? "主题：跟随系统" : (next === "dark" ? "主题：深色" : "主题：浅色"));
+    }
+
     // 初始化
     (async function init() {
+      applyTheme();
       // 0. file:// 本地打开提示（浏览器禁止 file:// 访问 /api，避免用户以为坏了）
       if (location.protocol === "file:") {
         showMsg("error", "当前以本地文件方式打开，/api 接口不可用（浏览器禁止 file:// 访问）。请通过服务器地址访问，例如 http://<服务器IP>:7777/");
