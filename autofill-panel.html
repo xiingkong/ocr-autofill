@@ -3,475 +3,738 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>自动填表配置面板</title>
+  <title>自动填表助手 · 控制台</title>
   <style>
+    /* ============================================================
+       v3 全新视觉：现代 SaaS 风格
+       - 全部 id / class / JS 逻辑与原版一致（保证无 bug）
+       - 仅重做视觉层（配色 / 圆角 / 阴影 / 动效 / 布局骨架）
+       ============================================================ */
+    :root {
+      --brand: #3b6ef5;
+      --brand-2: #7c4dff;
+      --brand-grad: linear-gradient(135deg, #3b6ef5, #7c4dff);
+      --bg: #eef2f9;
+      --card: #ffffff;
+      --text: #1e2a3a;
+      --text-2: #5d6b80;
+      --text-3: #93a1b5;
+      --border: #e2e8f2;
+      --radius: 14px;
+      --radius-s: 9px;
+      --shadow: 0 6px 24px rgba(28, 55, 110, .08);
+      --shadow-hover: 0 12px 32px rgba(28, 55, 110, .14);
+      --primary: #3b6ef5;
+      --primary-hover: #2f5de0;
+      --green: #16a34a;
+      --red: #e5484d;
+      --orange: #f59e0b;
+      --mono: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+    }
     * { box-sizing: border-box; }
-    body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 0; padding: 16px; background: #f5f6f8; color: #2c3e50; }
-    h1 { font-size: 18px; margin: 0 0 12px; }
-    h2 { font-size: 15px; margin: 0 0 8px; }
-    h3 { font-size: 13px; margin: 0 0 6px; color: #555; }
-    .card { background: #fff; padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #e0e0e0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-    .pwd-tip { background: #fff8e1; border: 1px solid #ffe082; color: #8d6e63; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
-    .pwd-tip b { color: #bf360c; }
-    .saved-hint { font-size: 12px; color: #2e7d32; margin-left: 8px; }
-    tbody tr:nth-child(odd) td { background: #fafbfc; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    .domain-tag { background: #e3f2fd; padding: 6px 12px; border-radius: 4px; font-size: 13px; display: inline-block; margin-bottom: 8px; }
-    .domain-tag code { color: #1976d2; font-weight: bold; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      margin: 0; padding: 0;
+      background: linear-gradient(165deg, #eef2f9 0%, #e9eef8 45%, #e3eaf6 100%);
+      background-attachment: fixed;
+      color: var(--text);
+      min-height: 100vh;
+    }
+    h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: .3px; color: var(--text); }
+    h2 { font-size: 15px; margin: 0 0 10px; font-weight: 650; color: var(--text); display: flex; align-items: center; gap: 7px; }
+    h3 { font-size: 13px; margin: 0 0 6px; color: var(--text-2); }
+    p { margin: 0; }
+
+    /* ---------- 顶部品牌栏 ---------- */
+    .app-header {
+      position: sticky; top: 0; z-index: 800;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 12px 22px;
+      background: rgba(255, 255, 255, .82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(226, 232, 242, .9);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-logo {
+      width: 42px; height: 42px; border-radius: 12px; flex: 0 0 auto;
+      background: var(--brand-grad);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 21px; color: #fff;
+      box-shadow: 0 4px 14px rgba(59, 110, 245, .35);
+    }
+    .brand-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; letter-spacing: .2px; }
+    .header-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+    .header-domain {
+      display: flex; align-items: center; gap: 6px;
+      background: #eef3fd; border: 1px solid #d9e4f7; color: #2b4b8f;
+      padding: 6px 12px; border-radius: 999px; font-size: 12px;
+      max-width: 46vw; white-space: nowrap; overflow: hidden;
+    }
+    .header-domain code { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ---------- 布局容器 ---------- */
+    .page { max-width: 1060px; margin: 0 auto; padding: 18px 16px 96px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .span-2 { grid-column: 1 / -1; }
+
+    /* ---------- 卡片 ---------- */
+    .card {
+      background: var(--card); border-radius: var(--radius);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      transition: box-shadow .22s ease, transform .22s ease;
+    }
+    .card:hover { box-shadow: var(--shadow-hover); }
+    .card-title-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .card-title-bar h2 { margin: 0; }
+    .card-note { font-size: 12px; color: var(--text-3); font-weight: 400; }
+    .ico { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 7px; background: #eef3fd; font-size: 13px; flex: 0 0 auto; }
+
+    /* ---------- 主操作卡 ---------- */
+    .main-ops-card {
+      background: linear-gradient(150deg, #ffffff 0%, #f4f7ff 70%, #eef2ff 100%);
+      border: 1px solid #dbe4f8;
+      padding: 20px 22px;
+    }
+    .region-row { display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+    .region-field { flex: 1 1 320px; min-width: 260px; }
+    .region-field label { display: block; font-size: 13px; color: #46587a; font-weight: 650; margin-bottom: 6px; letter-spacing: .3px; }
+    .region-field input {
+      width: 100%; font-size: 16px; padding: 11px 14px;
+      border: 2px solid #cdd9f0; border-radius: 11px;
+      background: #fff; color: var(--text);
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .region-field input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(59, 110, 245, .14); }
+    .region-hint { font-size: 12px; color: var(--text-3); margin-top: 6px; }
+    .run-all-btn {
+      padding: 13px 28px; font-size: 15px; font-weight: 650;
+      border-radius: 12px; border: 0;
+      background: var(--brand-grad); color: #fff;
+      box-shadow: 0 6px 18px rgba(59, 110, 245, .38);
+      transition: transform .18s ease, box-shadow .18s ease;
+      white-space: nowrap;
+    }
+    .run-all-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 26px rgba(59, 110, 245, .46); }
+    .run-opts {
+      display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+      margin-top: 16px; padding-top: 14px; border-top: 1px dashed #d8e1f2;
+      font-size: 13px;
+    }
+    .run-opts label { cursor: pointer; color: #3d4f6e; user-select: none; display: inline-flex; align-items: center; gap: 5px; }
+    .opts-label { color: var(--text-3); font-weight: 600; }
+    .opts-sep { color: #c9d4e6; }
+    .opt-pill {
+      background: #fff; border: 1px solid var(--border); border-radius: 999px;
+      padding: 5px 12px; transition: border-color .15s, background .15s;
+    }
+    .opt-pill:hover { border-color: #b9c9e8; }
+    .db-switch-note {
+      margin-top: 10px; padding: 8px 12px; border-radius: var(--radius-s);
+      background: #eef4ff; border: 1px solid #d5e3ff; color: #3d5aa8;
+      font-size: 12px; line-height: 1.55;
+    }
+
+    /* ---------- 按钮 ---------- */
+    button {
+      padding: 7px 14px; border: 1px solid var(--border); background: #fff;
+      border-radius: var(--radius-s); cursor: pointer; font-size: 13px;
+      color: var(--text); font-family: inherit;
+      transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .12s ease;
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    }
+    button:hover { background: #f4f7fb; border-color: #c9d4e6; }
+    button:active { transform: scale(.97); }
+    button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+    button.primary {
+      background: var(--brand-grad); color: #fff; border: 0;
+      box-shadow: 0 3px 10px rgba(59, 110, 245, .28);
+    }
+    button.primary:hover { background: var(--brand-grad); filter: brightness(1.06); }
+    button.danger { color: var(--red); border-color: #f3c4c5; background: #fff; }
+    button.danger:hover { background: #fdf0f0; border-color: #eb9d9f; }
+    .ghost-btn { background: transparent; border-color: transparent; color: var(--text-2); }
+    .ghost-btn:hover { background: #eef2f8; }
+
+    /* ---------- 表单 ---------- */
+    input, textarea, select {
+      padding: 8px 11px; border: 1px solid var(--border); border-radius: var(--radius-s);
+      font-size: 13px; font-family: inherit; background: #fff; color: var(--text);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59, 110, 245, .12); }
     .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-    .row label { width: 90px; font-size: 13px; color: #555; }
-    .row input, .row select { flex: 1; min-width: 120px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 13px; }
+    .row label { width: 90px; font-size: 13px; color: var(--text-2); }
+    .row input, .row select { flex: 1; min-width: 120px; }
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    button { padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
-    button:hover { background: #f0f0f0; }
-    button.primary { background: #1976d2; color: #fff; border-color: #1976d2; }
-    button.primary:hover { background: #1565c0; }
-    button.danger { color: #e74c3c; border-color: #e74c3c; }
-    .action { background: #fafafa; padding: 10px; border-radius: 4px; margin-bottom: 8px; border: 1px solid #eee; }
-    .action-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .action-type { font-weight: bold; color: #1976d2; font-size: 13px; }
-    .op-move { padding: 2px 8px; font-size: 12px; background: #e3f2fd; color: #1976d2; border-color: #bbdefb; }
-    .op-move:hover { background: #bbdefb; }
-    .op-move:disabled { opacity: 0.3; cursor: not-allowed; }
-    .insert-bar { display: flex; gap: 6px; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #eee; }
-    .insert-bar .label { color: #999; font-size: 12px; margin-right: 4px; }
-    .insert-bar button { padding: 3px 8px; font-size: 12px; background: #fff3e0; border-color: #ffe0b2; color: #e65100; }
-    .insert-bar button:hover { background: #ffe0b2; }
-    .sel-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; padding: 4px 6px; background: #f5f5f5; border-radius: 3px; }
-    .sel-row code { flex: 1; word-break: break-all; }
-    .sel-row .sel-use { padding: 3px 8px; font-size: 12px; background: #e8f5e9; color: #2e7d32; border-color: #c8e6c9; }
-    .sel-row .sel-use:hover { background: #c8e6c9; }
-    .empty { text-align: center; padding: 24px; color: #999; font-size: 13px; }
-    .msg { padding: 8px; border-radius: 4px; font-size: 13px; display: none; margin-top: 8px; }
-    .msg.success { display: block; background: #e8f5e9; color: #2e7d32; }
-    .msg.error { display: block; background: #ffebee; color: #c62828; }
-    .msg.info { display: block; background: #e3f2fd; color: #1565c0; }
-    .tabs { display: flex; gap: 4px; border-bottom: 2px solid #e0e0e0; margin-bottom: 12px; }
-    .tab { padding: 8px 16px; cursor: pointer; border: 0; background: transparent; border-radius: 0; color: #666; }
-    .tab.active { color: #1976d2; border-bottom: 2px solid #1976d2; margin-bottom: -2px; font-weight: bold; }
+
+    /* ---------- 提示条 ---------- */
+    .pwd-tip {
+      background: #fff7e6; border: 1px solid #f3d9a4; color: #8a6a2b;
+      padding: 10px 14px; border-radius: 10px; font-size: 12.5px;
+      margin-bottom: 14px; line-height: 1.65;
+      display: flex; align-items: flex-start; gap: 8px;
+    }
+    .pwd-tip b { color: #c2410c; }
+    .mobile-tip { display: none; background: #fff7e6; border: 1px solid #f3d9a4; color: #8a6a2b; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; line-height: 1.6; }
+    .mobile-tip b { color: #c2410c; }
+    .saved-hint { font-size: 12px; color: var(--green); margin-left: 8px; font-weight: 500; }
+
+    /* ---------- 表格 ---------- */
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; border: 1px solid var(--border); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
-    th { background: #f5f5f5; font-weight: bold; }
-    .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; }
-    .badge.daily { background: #e8f5e9; color: #2e7d32; }
-    .badge.weekly { background: #e3f2fd; color: #1565c0; }
-    .badge.monthly { background: #fff3e0; color: #e65100; }
-    .badge.once { background: #f3e5f5; color: #6a1b9a; }
-    .badge.active { background: #ff5722; color: #fff; }
-    code.inline { background: #f5f5f5; padding: 1px 4px; border-radius: 3px; font-size: 12px; color: #c7254e; }
+    th, td { padding: 9px 12px; border-bottom: 1px solid #eef1f7; text-align: left; white-space: nowrap; }
+    th { background: #f3f6fb; color: #3b4e6d; font-weight: 650; font-size: 12.5px; }
+    tbody tr:nth-child(odd) td { background: #fafbfe; }
+    tbody tr:hover td { background: #f0f5fd; }
+    tbody tr:last-child td { border-bottom: 0; }
+    th:first-child, td:first-child { padding-left: 14px; }
+    th:last-child, td:last-child { padding-right: 14px; }
+
+    /* ---------- 徽章 ---------- */
+    .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
+    .badge.daily { background: #e7f6ec; color: #15803d; }
+    .badge.weekly { background: #e8f0fe; color: #2558c9; }
+    .badge.monthly { background: #fff1de; color: #c2540a; }
+    .badge.once { background: #f3ecfb; color: #7c3aed; }
+    .badge.active { background: linear-gradient(135deg, #ff6b4a, #ff3d5a); color: #fff; }
+
+    /* ---------- 标签 / 代码 ---------- */
+    .domain-tag { background: #eef3fd; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; display: inline-block; color: #2b4b8f; }
+    .domain-tag code { color: #1d4ed8; font-weight: 700; }
+    code.inline { background: #eef2f8; padding: 2px 6px; border-radius: 5px; font-size: 12px; color: #c026d3; font-family: var(--mono); }
+    code { font-family: var(--mono); }
+
+    /* ---------- 操作编辑器（页面配置） ---------- */
+    .action { background: #fafbfe; padding: 12px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #e9edf5; transition: border-color .15s; }
+    .action:hover { border-color: #cdd9f0; }
+    .action-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .action-type { font-weight: 700; color: var(--primary); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+    .action-type::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--brand-grad); display: inline-block; }
+    .op-move { padding: 3px 10px; font-size: 12px; background: #eef3fd; color: var(--primary); border-color: #d8e4f8; }
+    .op-move:hover { background: #dfe9fb; }
+    .op-move:disabled { opacity: .3; cursor: not-allowed; }
+    .insert-bar { display: flex; gap: 6px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e3e8f2; flex-wrap: wrap; }
+    .insert-bar .label { color: var(--text-3); font-size: 12px; margin-right: 2px; }
+    .insert-bar button { padding: 4px 10px; font-size: 12px; background: #fff4e5; border-color: #f8dfc0; color: #c2540a; }
+    .insert-bar button:hover { background: #ffe8c9; }
+    .sel-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; padding: 6px 8px; background: #f2f5fa; border-radius: 8px; }
+    .sel-row code { flex: 1; word-break: break-all; }
+    .sel-row .sel-use { padding: 4px 10px; font-size: 12px; background: #e7f6ec; color: #15803d; border-color: #c7ecd3; }
+    .sel-row .sel-use:hover { background: #d4f0de; }
+
+    /* ---------- 消息 toast ---------- */
+    .msg {
+      position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+      z-index: 1200; max-width: min(560px, 92vw);
+      padding: 11px 18px; border-radius: 12px; font-size: 13px;
+      box-shadow: 0 10px 30px rgba(20, 40, 80, .18);
+      display: none; line-height: 1.5;
+    }
+    .msg.success { display: block; background: #e7f6ec; color: #15803d; border: 1px solid #bce8cc; }
+    .msg.error { display: block; background: #fdeeee; color: #c62828; border: 1px solid #f5c6c8; }
+    .msg.info { display: block; background: #e8f0fe; color: #1d4ed8; border: 1px solid #c8dafb; }
+
+    /* ---------- 空态 ---------- */
+    .empty { text-align: center; padding: 28px; color: var(--text-3); font-size: 13px; }
+
+    /* ---------- 配置抽屉 ---------- */
+    .cfg-mask { position: fixed; inset: 0; background: rgba(16, 26, 48, .45); opacity: 0; pointer-events: none; transition: opacity .25s ease; z-index: 900; }
+    .cfg-mask.on { opacity: 1; pointer-events: auto; }
+    .cfg-drawer {
+      position: fixed; top: 0; right: 0; height: 100vh; width: min(480px, 94vw);
+      background: #f5f7fc;
+      box-shadow: -14px 0 44px rgba(15, 30, 60, .22);
+      transform: translateX(106%); transition: transform .30s cubic-bezier(.22, .9, .36, 1);
+      z-index: 910; overflow-y: auto; padding: 16px;
+    }
+    .cfg-drawer.on { transform: translateX(0); }
+    .cfg-drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 2px 2px 10px; border-bottom: 2px solid #dde5f2; position: sticky; top: -16px; background: #f5f7fc; z-index: 5; padding-top: 4px; }
+    .cfg-drawer-head b { font-size: 16px; color: var(--text); display: inline-flex; align-items: center; gap: 8px; }
+    .cfg-close { width: 34px; height: 34px; border-radius: 50%; border: 0; background: #e6ebf5; color: var(--text-2); font-size: 15px; cursor: pointer; line-height: 1; }
+    .cfg-close:hover { background: #d8e0ef; }
+    .cfg-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+    #cfgFab {
+      position: fixed; right: 22px; bottom: 22px; z-index: 920;
+      width: 56px; height: 56px; border-radius: 50%; border: 0;
+      background: var(--brand-grad); color: #fff; font-size: 23px;
+      box-shadow: 0 8px 24px rgba(59, 110, 245, .45);
+      cursor: pointer; transition: transform .2s ease, box-shadow .2s ease;
+    }
+    #cfgFab:hover { transform: scale(1.09) rotate(12deg); box-shadow: 0 10px 30px rgba(59, 110, 245, .55); }
+
+    /* ---------- 进度日志 ---------- */
+    .log-tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .log-tools label { font-size: 12px; color: var(--text-2); margin-left: auto; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    #runProgress {
+      background: #101828; color: #d7e2f5;
+      padding: 12px; border-radius: 10px;
+      height: 300px; overflow: auto;
+      font-family: var(--mono); font-size: 11.5px; line-height: 1.65;
+      white-space: pre-wrap;
+      border: 1px solid #1e2a44;
+    }
+    #runProgress div { margin-bottom: 2px; }
+    .run-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    #pauseBtn { background: #f59e0b; color: #fff; border-color: #f59e0b; }
+    #pauseBtn:hover { background: #d97706; border-color: #d97706; }
+
+    /* ---------- 折叠面板（账号/区/CDK 查询类） ---------- */
+    .query-box { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .query-result {
+      margin-top: 10px; padding: 12px; background: #fafbfe;
+      border: 1px solid var(--border); border-radius: 10px;
+    }
+    .tag-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #e8f0fe; color: #2558c9; font-size: 12px; font-weight: 600;
+      padding: 5px 10px; border-radius: 999px;
+    }
+    .tag-chip a { color: var(--red); text-decoration: none; font-weight: 700; }
+
+    /* ---------- 二维码 ---------- */
+    .qr-card { display: flex; align-items: center; gap: 14px; background: linear-gradient(135deg, #eef3fd, #e6edfb); padding: 12px; border-radius: 12px; margin-bottom: 12px; border: 1px solid #d8e4f8; }
+    .qr-card img { width: 108px; height: 108px; background: #fff; border: 1px solid #c3d5f2; padding: 4px; border-radius: 8px; }
+    .qr-card .qr-text { font-size: 13px; color: #2b4b8f; line-height: 1.7; }
+    .qr-card .qr-text code { background: #fff; padding: 2px 8px; border-radius: 6px; color: #1d4ed8; font-weight: 700; }
+
+    /* ---------- 添加区 / 批量导入 ---------- */
+    .acct-add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+    .acct-batch { margin-top: 12px; padding: 12px; background: #fafbfe; border: 1px dashed #ccd7ea; border-radius: 10px; }
+    .acct-batch .hint { font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+    .test-redeem-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
     /* ---------- 响应式：手机端 ---------- */
-    .mobile-tip { display: none; background: #fff3e0; border: 1px solid #ffe0b2; color: #e65100; padding: 10px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
-    .mobile-tip b { color: #bf360c; }
-    .qr-card { display: flex; align-items: center; gap: 12px; background: #e3f2fd; padding: 10px; border-radius: 4px; margin-bottom: 12px; }
-    .qr-card img { width: 110px; height: 110px; background: #fff; border: 1px solid #90caf9; padding: 4px; }
-    .qr-card .qr-text { font-size: 13px; color: #1565c0; line-height: 1.7; }
-    .qr-card .qr-text code { background: #fff; padding: 2px 6px; border-radius: 3px; color: #0d47a1; font-weight: bold; }
-    /* ---------- 表格横向滚动容器（手机端防挤压） ---------- */
-    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     @media (max-width: 768px) {
-      body { padding: 10px; }
-      h1 { font-size: 16px; }
+      body { padding: 0; }
+      .page { padding: 12px 10px 88px; }
+      .app-header { padding: 10px 12px; }
+      .brand-logo { width: 36px; height: 36px; font-size: 18px; border-radius: 10px; }
+      h1 { font-size: 17px; }
+      .header-domain { max-width: 44vw; font-size: 11px; padding: 5px 10px; }
+      .grid { grid-template-columns: 1fr; }
+      .region-row { flex-direction: column; align-items: stretch; }
+      .region-field { flex: 1 1 auto; min-width: 0; }
+      .run-all-btn { width: 100%; }
       .row label { width: 100%; }
-      .row input, .row select { width: 100%; }
+      .row input, .row select { width: 100%; flex: 1 1 100%; }
       .toolbar { flex-direction: column; align-items: stretch; }
-      .toolbar button { width: 100%; min-height: 38px; }
-      .action { padding: 8px; }
+      .toolbar button { width: 100%; min-height: 40px; }
+      .action { padding: 10px; }
       .action-head { flex-wrap: wrap; gap: 6px; }
       .insert-bar { flex-wrap: wrap; }
-      #runProgress { height: 50vh; font-size: 10px; }
-      .card { padding: 10px; }
+      #runProgress { height: 46vh; font-size: 10.5px; }
+      .card { padding: 13px; }
       table { font-size: 12px; }
-      th, td { padding: 4px 6px; }
-      .table-wrap table { min-width: 520px; }  /* 手机端表格横向滚动，不挤压列 */
+      th, td { padding: 7px 8px; }
+      .table-wrap table { min-width: 540px; }
       .mobile-tip { display: block; }
-      .qr-card { display: none; }  /* 手机端自己看自己，不需要二维码 */
+      .qr-card { display: none; }
       .tabs { overflow-x: auto; flex-wrap: nowrap; }
       .tab { flex: 0 0 auto; padding: 8px 12px; font-size: 12px; }
-      button { min-height: 36px; }  /* 触屏点击区 */
-      /* 内联输入行：手机端竖排全宽 */
-      .acct-add-row { flex-wrap: wrap; }
+      button { min-height: 38px; }
       .acct-add-row input { flex: 1 1 100%; min-width: 0; }
       .acct-add-row button { flex: 1 1 100%; }
       .test-redeem-row input { flex: 1 1 100%; min-width: 0; }
       .test-redeem-row button { flex: 1 1 100%; }
       .run-btns { flex-wrap: wrap; }
       .run-btns button { flex: 1 1 30%; }
-    }
-
-    /* ---------- 深色模式：跟随系统（prefers-color-scheme） ---------- */
-    @media (prefers-color-scheme: dark) {
-      body { background: #121418; color: #d8dde4; }
-      .card { background: #1c1f26; border-color: #2e333c; box-shadow: none; }
-      h3 { color: #9aa3af; }
-      .tabs { border-color: #2e333c; }
-      .tab { color: #9aa3af; }
-      .tab.active { color: #90caf9; border-color: #90caf9; }
-      .row label { color: #9aa3af; }
-      .row input, .row select, input, textarea, select { background: #262b33; color: #d8dde4; border-color: #3a4150; }
-      button { background: #262b33; color: #d8dde4; border-color: #3a4150; }
-      button:hover { background: #333a46; }
-      button.primary { background: #1976d2; color: #fff; border-color: #1976d2; }
-      button.danger { color: #ff8a80; border-color: #ff8a80; }
-      th, td { border-color: #2e333c; }
-      th { background: #262b33; }
-      tbody tr:nth-child(odd) td { background: #21252d; }
-      .action { background: #1f232b; border-color: #2e333c; }
-      .sel-row { background: #262b33; }
-      .domain-tag { background: #10243a; }
-      .domain-tag code { color: #90caf9; }
-      #runProgress { background: #16191f !important; }
-      .msg.success { background: #1b2e24; color: #81c784; }
-      .msg.error { background: #331f24; color: #ef9a9a; }
-      .msg.info { background: #14273a; color: #90caf9; }
-      .pwd-tip { background: #33290f; border-color: #66521f; color: #ffd54f; }
-      .pwd-tip b { color: #ffab91; }
-      .mobile-tip { background: #33290f; border-color: #66521f; color: #ffd54f; }
-      .insert-bar { border-top-color: #2e333c; }
-      .insert-bar button { background: #33290f; border-color: #66521f; color: #ffb74d; }
-      .insert-bar button:hover { background: #4a3c16; }
-      .op-move { background: #10243a; color: #90caf9; border-color: #1e3a5f; }
-      .sel-row .sel-use { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
-      .badge.daily { background: #1b2e24; color: #81c784; }
-      .badge.weekly { background: #10243a; color: #90caf9; }
-      .badge.monthly { background: #33290f; color: #ffb74d; }
-      .badge.once { background: #2a1f33; color: #ce93d8; }
-      code.inline { background: #262b33; color: #f48fb1; }
-      .saved-hint { color: #81c784; }
-      .empty { color: #6b7684; }
-    }
-
-    /* ============================================================
-       改版 v2：运行/账号合一主界面 + 配置抽屉 + 全面美化
-       ============================================================ */
-    body { background: linear-gradient(170deg, #eef3fb 0%, #e6edf7 55%, #dfe8f4 100%); background-attachment: fixed; }
-    h1 { font-size: 21px; font-weight: 700; letter-spacing: .5px; color: #14335c; display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-    h2 { font-size: 15px; }
-    .card { border-radius: 12px; border-color: #dfe6f0; box-shadow: 0 2px 10px rgba(30,60,110,.07); transition: box-shadow .2s ease; }
-    .card:hover { box-shadow: 0 4px 16px rgba(30,60,110,.10); }
-    .main-ops-card { background: linear-gradient(135deg, #ffffff, #f3f7fd); padding: 14px 16px; }
-    .region-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
-    .region-field { flex: 1 1 320px; min-width: 260px; }
-    .region-field label { display: block; font-size: 13px; color: #4a6a8f; font-weight: 600; margin-bottom: 4px; }
-    .region-field input { width: 100%; font-size: 15px; padding: 9px 12px; border: 2px solid #c9d8ec; border-radius: 8px; transition: border-color .2s, box-shadow .2s; background: #fff; }
-    .region-field input:focus { outline: none; border-color: #1976d2; box-shadow: 0 0 0 3px rgba(25,118,210,.15); }
-    .region-hint { font-size: 12px; color: #8aa0ba; margin-top: 4px; }
-    .run-all-btn { padding: 10px 22px; font-size: 15px; border-radius: 8px; box-shadow: 0 3px 10px rgba(25,118,210,.30); }
-    .run-all-btn:hover { box-shadow: 0 5px 14px rgba(25,118,210,.38); }
-    .run-opts { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px dashed #d5e0ee; font-size: 13px; }
-    .run-opts label { cursor: pointer; color: #42597a; user-select: none; }
-    .opts-label { color: #8aa0ba; }
-    .opts-sep { color: #c3d0e0; }
-    .run-opts button { border-radius: 6px; }
-    /* 配置抽屉 */
-    .cfg-mask { position: fixed; inset: 0; background: rgba(18,28,48,.45); opacity: 0; pointer-events: none; transition: opacity .25s ease; z-index: 900; }
-    .cfg-mask.on { opacity: 1; pointer-events: auto; }
-    .cfg-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(470px, 94vw); background: #f4f7fb; box-shadow: -10px 0 36px rgba(15,30,60,.20); transform: translateX(106%); transition: transform .30s cubic-bezier(.22,.9,.36,1); z-index: 910; overflow-y: auto; padding: 14px; box-sizing: border-box; }
-    .cfg-drawer.on { transform: translateX(0); }
-    .cfg-drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding: 2px 2px 8px; border-bottom: 2px solid #d5e0ee; }
-    .cfg-drawer-head b { font-size: 16px; color: #14335c; }
-    .cfg-close { width: 32px; height: 32px; border-radius: 50%; border: 0; background: #e3eaf4; color: #4a6a8f; font-size: 15px; cursor: pointer; line-height: 1; }
-    .cfg-close:hover { background: #d3deec; }
-    .cfg-btns { display: flex; gap: 8px; flex-wrap: wrap; }
-    .cfg-btns button { border-radius: 6px; }
-    #cfgFab { position: fixed; right: 20px; bottom: 20px; z-index: 920; width: 54px; height: 54px; border-radius: 50%; border: 0; background: linear-gradient(135deg, #1976d2, #42a5f5); color: #fff; font-size: 22px; box-shadow: 0 5px 18px rgba(25,118,210,.42); cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
-    #cfgFab:hover { transform: scale(1.08); box-shadow: 0 7px 22px rgba(25,118,210,.50); }
-    /* 表格 / 按钮细节美化 */
-    table { border-radius: 8px; overflow: hidden; }
-    th { background: #eef3fa; color: #2f4b70; }
-    tbody tr:hover td { background: #f2f7fd; }
-    button { border-radius: 6px; }
-    /* 响应式：抽屉全宽 + 主操作卡竖排 */
-    @media (max-width: 768px) {
-      #cfgFab { width: 48px; height: 48px; right: 14px; bottom: 14px; font-size: 20px; }
+      .query-box input { flex: 1 1 100%; }
+      .query-box button { flex: 1 1 30%; }
+      #cfgFab { width: 50px; height: 50px; right: 14px; bottom: 14px; font-size: 20px; }
       .cfg-drawer { width: 100vw; }
-      .region-row { flex-direction: column; align-items: stretch; }
-      .region-field { flex: 1 1 auto; min-width: 0; }
-      .run-all-btn { width: 100%; }
-    }
-    /* 深色模式适配（新组件） */
-    @media (prefers-color-scheme: dark) {
-      body { background: linear-gradient(170deg, #10131a 0%, #141922 60%, #161c26 100%); background-attachment: fixed; }
-      h1 { color: #b6c8e2; }
-      .main-ops-card { background: linear-gradient(135deg, #1c1f26, #18202c); }
-      .region-field label { color: #9aa8bd; }
-      .region-field input { background: #262b33; color: #d8dde4; border-color: #3a4150; }
-      .region-field input:focus { border-color: #42a5f5; box-shadow: 0 0 0 3px rgba(66,165,245,.18); }
-      .region-hint { color: #6b7684; }
-      .run-opts { border-top-color: #2e333c; }
-      .run-opts label { color: #9aa3af; }
-      .opts-label { color: #6b7684; }
-      .opts-sep { color: #3a4150; }
-      .cfg-drawer { background: #14181f; box-shadow: -10px 0 36px rgba(0,0,0,.5); }
-      .cfg-drawer-head { border-bottom-color: #2e333c; }
-      .cfg-drawer-head b { color: #b6c8e2; }
-      .cfg-close { background: #262b33; color: #9aa3af; }
-      .cfg-close:hover { background: #333a46; }
-      th { background: #262b33; color: #b6c8e2; }
-      tbody tr:hover td { background: #21252d; }
     }
 
+    /* ---------- Tab（页面配置） ---------- */
+    .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+    .tab {
+      padding: 9px 16px; cursor: pointer; border: 0; background: transparent;
+      border-radius: 0; color: var(--text-2); font-size: 13px; font-weight: 500;
+      border-bottom: 2px solid transparent; margin-bottom: -2px;
+      white-space: nowrap; transition: color .15s;
+    }
+    .tab.active { color: var(--primary); border-bottom: 2px solid var(--primary); font-weight: 700; }
+
+    /* ---------- 深色模式 ---------- */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0e1117; --card: #171b24; --text: #e3e8f0; --text-2: #a2adbd;
+        --text-3: #6d7a8d; --border: #262e3d;
+      }
+      body { background: linear-gradient(165deg, #0e1117 0%, #121722 50%, #141a26 100%); background-attachment: fixed; }
+      .app-header { background: rgba(18, 22, 30, .82); border-bottom-color: #232b3a; }
+      .brand-sub { color: #5f6c80; }
+      .header-domain { background: #18233a; border-color: #27406b; color: #a9c2ec; }
+      .header-domain code { color: #7aa7f5; }
+      .card { background: #171b24; border-color: #232b3a; }
+      .main-ops-card { background: linear-gradient(150deg, #1a1f2a 0%, #161d2c 70%, #151b29 100%); border-color: #24304a; }
+      .region-field label { color: #a2adbd; }
+      .region-field input { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      .region-field input:focus { border-color: #5b8ef7; box-shadow: 0 0 0 4px rgba(91, 142, 247, .18); }
+      .region-hint { color: #5f6c80; }
+      .run-opts { border-top-color: #2a3345; }
+      .run-opts label { color: #a2adbd; }
+      .opts-label { color: #5f6c80; }
+      .opts-sep { color: #33405a; }
+      .opt-pill { background: #1d2330; border-color: #2c3648; }
+      .opt-pill:hover { border-color: #3d4d6e; }
+      input, textarea, select { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      button { background: #1f2532; color: #e3e8f0; border-color: #33405a; }
+      button:hover { background: #273042; }
+      button.primary { background: var(--brand-grad); color: #fff; }
+      button.danger { color: #ff8a80; border-color: #6e3234; background: #20181d; }
+      button.danger:hover { background: #2a1c20; }
+      .ghost-btn { background: transparent; border-color: transparent; color: #8b97a8; }
+      .ghost-btn:hover { background: #232b3a; }
+      th, td { border-color: #232b3a; }
+      th { background: #1d2330; color: #b9c6da; }
+      tbody tr:nth-child(odd) td { background: #191f2a; }
+      tbody tr:hover td { background: #1e2736; }
+      .action { background: #1a1f2a; border-color: #262e3d; }
+      .action:hover { border-color: #3a4a6a; }
+      .action-type { color: #7aa7f5; }
+      .op-move { background: #18233a; color: #7aa7f5; border-color: #27406b; }
+      .op-move:hover { background: #1e2d4e; }
+      .insert-bar { border-top-color: #262e3d; }
+      .insert-bar button { background: #33290f; border-color: #66521f; color: #f5b942; }
+      .insert-bar button:hover { background: #4a3c16; }
+      .sel-row { background: #1d2330; }
+      .sel-row .sel-use { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      .pwd-tip, .mobile-tip { background: #33290f; border-color: #66521f; color: #e8c76a; }
+      .pwd-tip b, .mobile-tip b { color: #ffab91; }
+      .domain-tag { background: #18233a; }
+      .domain-tag code { color: #7aa7f5; }
+      .badge.daily { background: #1b2e24; color: #81c784; }
+      .badge.weekly { background: #18233a; color: #7aa7f5; }
+      .badge.monthly { background: #33290f; color: #f5b942; }
+      .badge.once { background: #2a1f33; color: #ce93d8; }
+      code.inline { background: #1f2532; color: #f48fb1; }
+      .cfg-drawer { background: #131722; box-shadow: -14px 0 44px rgba(0, 0, 0, .55); }
+      .cfg-drawer-head { background: #131722; border-bottom-color: #262e3d; }
+      .cfg-drawer-head b { color: #e3e8f0; }
+      .cfg-close { background: #1f2532; color: #a2adbd; }
+      .cfg-close:hover { background: #273042; }
+      .qr-card { background: linear-gradient(135deg, #18233a, #151d2e); border-color: #27406b; }
+      .qr-card .qr-text { color: #a9c2ec; }
+      .qr-card .qr-text code { background: #1f2532; color: #7aa7f5; }
+      .acct-batch { background: #1a1f2a; border-color: #2c3648; }
+      .query-result { background: #1a1f2a; border-color: #262e3d; }
+      .tag-chip { background: #18233a; color: #7aa7f5; }
+      .table-wrap { border-color: #232b3a; }
+      .msg.success { background: #1b2e24; color: #81c784; border-color: #2e5a41; }
+      .msg.error { background: #331f24; color: #ef9a9a; border-color: #6e3234; }
+      .msg.info { background: #14273a; color: #7aa7f5; border-color: #27406b; }
+      .empty { color: #5f6c80; }
+      .saved-hint { color: #81c784; }
+      .tab { color: #8b97a8; }
+      .tab.active { color: #7aa7f5; border-bottom-color: #7aa7f5; }
+    }
   </style>
 </head>
+
 <body>
-  <h1>🎯 自动填表配置面板</h1>
-
-  <!-- 明文密码提示：本浏览器开发者工具可读，不会被其他人看到 -->
-  <div class="pwd-tip" id="pwdTip">🔒 本浏览器保存的<b>账号/密码是明文</b>：本浏览器的<b>开发者工具（F12）可读</b>，不会被其他人看到（各浏览器互不互通）。</div>
-
-  <!-- 手机端提示：告诉用户这是远端控制台 -->
-  <div class="mobile-tip" id="mobileTip">
-    📱 <b>你现在在手机上</b>。页面配置、账号都只保存在<b>本浏览器</b>，不会和他人互通；实际执行由后端完成，手机同样可以配置页面、添加账号、查看日志、触发执行。
-  </div>
-
-  <!-- 主操作卡：只保留选区 + 一键执行（配置收进右下角 ⚙️ 抽屉，防误动） -->
-  <div class="card main-ops-card">
-    <div class="region-row">
-      <div class="region-field">
-        <label for="currentRegion">当前区</label>
-        <input id="currentRegion" placeholder="输入汉字几区，如：六区">
-        <div class="region-hint">输入汉字几区（如：六区），同步到 CDK 页和领取页的区下拉框</div>
-      </div>
-      <button id="runAll" class="primary run-all-btn">🚀 一键执行全部</button>
-    </div>
-    <div class="run-opts">
-      <span class="opts-label">执行:</span>
-      <label><input type="checkbox" id="runLogin" checked>登录页</label>
-      <label><input type="checkbox" id="runClaim" checked>登录后领取页</label>
-      <label><input type="checkbox" id="runCdk" checked>CDK 页</label>
-      <span class="opts-sep">|</span>
-      <button id="save">保存</button>
-      <span id="savedHint" class="saved-hint"></span>
-    </div>
-  </div>
-
-  <!-- 一键执行进度面板 -->
-  <div class="card" id="runPanel" style="display:none">
-    <h2>
-      <span id="runTitle">🚀 执行中</span>
-      <span style="font-weight:normal;color:#999;font-size:12px" id="runHint"></span>
-    </h2>
-    <div class="log-tools" style="margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-      <button id="logClear" title="清空本次运行的日志显示">🗑 清空</button>
-      <button id="logCopy" title="复制本次运行的日志到剪贴板">📋 复制日志</button>
-      <button id="logExport" title="把本次运行的全部日志导出为 txt 文件，方便排查">💾 导出全部日志</button>
-      <label style="font-size:12px;color:#666;margin-left:auto;display:flex;align-items:center;gap:4px"><input type="checkbox" id="logAutoScroll" checked> 自动滚动</label>
-    </div>
-    <div id="runProgress" style="background:#f5f5f5;padding:8px;border-radius:3px;height:280px;overflow:auto;font-family:monospace;font-size:11px;line-height:1.6;white-space:pre-wrap"></div>
-    <div class="run-btns" style="margin-top:8px;display:flex;gap:6px">
-      <button id="pauseBtn" onclick="togglePause()" style="background:#ff9800;color:#fff;border-color:#ff9800">⏸ 暂停</button>
-      <button id="cancelBtn" onclick="cancelTask()" class="danger">⏹ 取消任务</button>
-      <button id="closeRun">关闭面板</button>
-    </div>
-  </div>
-
-  <!-- 账号管理 -->
-  <div class="card">
-    <h2>账号管理 <span style="font-weight:normal;color:#999;font-size:12px">（仅显示本机添加的账号，其他人的不显示）</span></h2>
-    <div class="table-wrap">
-      <div style="margin-bottom:6px">
-        <input id="accountSearch" placeholder="🔍 搜索账号（只搜本浏览器列表）" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;width:100%;box-sizing:border-box">
-      </div>
-      <table id="accountTable">
-        <thead>
-          <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <div class="acct-add-row" style="margin-top:8px;display:flex;gap:8px;align-items:center">
-      <input id="newAccountUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
-      <input id="newAccountPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
-      <button class="primary" id="addAccount">+ 添加账号</button>
-    </div>
-    <div class="acct-batch" style="margin-top:8px;padding:8px;background:#fafafa;border:1px dashed #ccc;border-radius:4px">
-      <div style="font-size:12px;color:#666;margin-bottom:4px">批量导入（每行：<b>账号 密码</b>，可加第三列区，如 <code>123456 密码 六区</code>；留空区=当前区）</div>
-      <textarea id="batchAccountInput" rows="3" placeholder="每行一个账号&#10;user1 pass1 六区&#10;user2 pass2" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;padding:6px;border:1px solid #ddd;border-radius:3px"></textarea>
-      <div style="margin-top:6px;display:flex;align-items:center;gap:8px">
-        <button class="primary" id="batchImportBtn">📥 批量导入</button>
-        <span id="batchImportStatus" style="font-size:12px;color:#666"></span>
+  <!-- 顶部品牌栏（纯展示，无 JS 依赖） -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo">🎯</div>
+      <div>
+        <h1>自动填表助手</h1>
+        <div class="brand-sub">账号自动兑换 · 配置按浏览器隔离</div>
       </div>
     </div>
-  </div>
+    <div class="header-right">
+      <span class="header-domain">🌐 当前域名：<code id="currentDomain">未设置</code></span>
+    </div>
+  </header>
 
-  <!-- 测试兑换（临时账密，跑完入库） -->
-  <div class="card">
-    <h2>测试兑换 <span style="font-weight:normal;color:#999;font-size:12px">（临时账密，用后端 CDK 池跑一次，跑完自动入库）</span></h2>
-    <div class="test-redeem-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <input id="testUser" placeholder="游戏账号" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
-      <input id="testPass" type="password" placeholder="游戏密码" style="padding:6px 8px;border:1px solid #ddd;border-radius:3px;min-width:120px">
-      <button class="primary" id="testRedeemBtn">▶ 测试兑换</button>
-      <span id="testRedeemStatus" style="font-size:12px;color:#666"></span>
-    </div>
-    <div style="margin-top:6px;font-size:12px;color:#999">
-      <label style="cursor:pointer">
-        <input type="checkbox" id="rememberTest" checked> 记住账密（仅本浏览器，密码明文存 localStorage）
-      </label>
-      <button id="forgetTestBtn" style="margin-left:8px;padding:2px 8px;font-size:11px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px">🗑 忘记账密</button>
-    </div>
-  </div>
+  <div class="page">
 
-  <!-- 账号区查询/修改（要求2：密码校验后查看/修改账号的区） -->
-  <div class="card">
-    <h2>账号区查询/修改 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码验证，可查看/修改该账号的区）</span></h2>
-    <div class="row">
-      <label>账号</label>
-      <input id="regionQueryUser" placeholder="游戏账号">
-      <label style="width:60px">密码</label>
-      <input id="regionQueryPass" type="password" placeholder="游戏密码">
-      <button class="primary" id="regionQueryBtn">查询</button>
-    </div>
-    <div id="regionQueryResult" style="display:none;margin-top:8px;padding:10px;background:#fafafa;border:1px solid #eee;border-radius:4px">
-      <div style="font-size:13px;margin-bottom:6px">账号 <b id="regionQueryName"></b> 当前的区：</div>
-      <div id="regionTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
-      <div class="row" style="margin:0">
-        <label style="width:auto;color:#666">新增区</label>
-        <input id="regionNewInput" placeholder="输入汉字几区，如：六区" style="flex:0 1 220px">
-        <button id="regionAddBtn">+ 添加</button>
-        <button class="primary" id="regionSaveBtn">保存修改</button>
-      </div>
-      <div style="font-size:12px;color:#999;margin-top:6px">输入汉字几区（如：六区）。定时任务会按账号保存的区逐个跑。</div>
-    </div>
-  </div>
+    <!-- 明文密码提示：本浏览器开发者工具可读，不会被其他人看到 -->
+    <div class="pwd-tip" id="pwdTip">🔒 <span>本浏览器保存的<b>账号/密码是明文</b>：本浏览器的<b>开发者工具（F12）可读</b>，不会被其他人看到（各浏览器互不互通）。</span></div>
 
-  <!-- CDK 周期设置（要求3：每账号日/周/月码 + 周月起始时间，按区独立） -->
-  <div class="card">
-    <h2>CDK 周期设置 <span style="font-weight:normal;color:#999;font-size:12px">（输账号+密码+区，可查看/修改该账号的日/周/月 CDK 与周期起始时间）</span></h2>
-    <div class="row">
-      <label>账号</label>
-      <input id="cdkQueryUser" placeholder="游戏账号">
-      <label style="width:60px">密码</label>
-      <input id="cdkQueryPass" type="password" placeholder="游戏密码">
-      <label style="width:60px">区</label>
-      <input id="cdkQueryRegion" placeholder="如：六区（可留空=默认区）" style="flex:0 1 190px">
-      <button class="primary" id="cdkQueryBtn">查询</button>
+    <!-- 手机端提示：告诉用户这是远端控制台 -->
+    <div class="mobile-tip" id="mobileTip">
+      📱 <b>你现在在手机上</b>。页面配置、账号都只保存在<b>本浏览器</b>，不会和他人互通；实际执行由后端完成，手机同样可以配置页面、添加账号、查看日志、触发执行。
     </div>
-    <div id="cdkQueryResult" style="display:none;margin-top:8px;padding:10px;background:#fafafa;border:1px solid #eee;border-radius:4px">
-      <div style="font-size:13px;margin-bottom:6px">账号 <b id="cdkQueryName"></b>（区：<b id="cdkQueryRegionName"></b>）的 CDK 设置：</div>
-      <div class="row" style="margin:0">
-        <label style="width:auto;color:#666">日CDK</label>
-        <input id="cdkDailyInput" style="flex:0 1 150px" placeholder="默认 hmxdy666">
-        <label style="width:auto;color:#666">周CDK</label>
-        <input id="cdkWeeklyInput" style="flex:0 1 150px" placeholder="默认 hmxdy777">
-        <label style="width:auto;color:#666">月CDK</label>
-        <input id="cdkMonthlyInput" style="flex:0 1 150px" placeholder="默认 hmxdy888">
-      </div>
-      <div class="row" style="margin:0">
-        <label style="width:auto;color:#666">周起始日期</label>
-        <input id="cdkWeeklyStart" type="date" style="flex:0 1 160px">
-        <label style="width:auto;color:#666">月起始日期</label>
-        <input id="cdkMonthlyStart" type="date" style="flex:0 1 160px">
-        <button class="primary" id="cdkCycleSaveBtn">保存修改</button>
-      </div>
-      <div id="cdkNextPlan" style="font-size:12px;color:#1565c0;margin-top:6px"></div>
-      <div style="font-size:12px;color:#999;margin-top:6px">周CDK 自起始日期起每 7 天跑一次；月CDK 自起始日期起每 30 天跑一次。起始日期留空 = 每天跑。跑出成功或"上限"后自动记录下次周期（错过会自动补跑）。</div>
-    </div>
-  </div>
 
-
-
-  <!-- 配置抽屉：右下角 ⚙️ 打开（配置收角落，防误动） -->
-  <button id="cfgFab" title="打开配置">⚙️</button>
-  <div id="cfgMask" class="cfg-mask"></div>
-  <aside id="cfgDrawer" class="cfg-drawer" aria-label="配置">
-    <div class="cfg-drawer-head">
-      <b>⚙️ 配置</b>
-      <button id="cfgClose" class="cfg-close" title="关闭">✕</button>
-    </div>
-    <div class="cfg-drawer-body">
-      <!-- 数据管理 -->
-      <div class="card">
-        <h2>数据管理</h2>
-        <div class="cfg-btns">
-          <button id="testOcr">测试 OCR</button>
-          <button id="export">导出 JSON</button>
-          <button id="import">导入 JSON</button>
-          <button id="clear">清空</button>
+    <!-- 主操作卡：只保留选区 + 一键执行（配置收进右下角 ⚙️ 抽屉，防误动） -->
+    <div class="card main-ops-card span-2">
+      <div class="region-row">
+        <div class="region-field">
+          <label for="currentRegion">🎮 当前区</label>
+          <input id="currentRegion" placeholder="输入汉字几区，如：六区">
+          <div class="region-hint">输入汉字几区（如：六区），同步到 CDK 页和领取页的区下拉框</div>
         </div>
+        <button id="runAll" class="primary run-all-btn">🚀 一键执行全部</button>
       </div>
-      <!-- 域名 / OCR 端点 -->
-      <div class="card">
-        <div class="domain-tag">当前域名：<code id="currentDomain">未选择</code></div>
-        <div class="row" style="margin-top:8px">
-          <label>域名</label>
-          <input id="domainInput" placeholder="newxiadan.3f8cz.com">
+      <div class="run-opts">
+        <span class="opts-label">执行目标</span>
+        <label class="opt-pill"><input type="checkbox" id="runLogin" checked>登录页</label>
+        <label class="opt-pill"><input type="checkbox" id="runClaim" checked>登录后领取页</label>
+        <label class="opt-pill"><input type="checkbox" id="runCdk" checked>CDK 页</label>
+        <span class="opts-sep">|</span>
+        <button id="save">💾 保存</button>
+        <span id="savedHint" class="saved-hint"></span>
+        <span class="opts-sep">|</span>
+        <label class="opt-pill" title="开启：执行时优先读取数据库内该账号保存的区、CDK周期；数据库没有该账号则用本页面配置跑。关闭：只用本页面配置，不读数据库。无论开关状态，执行成功都会自动入库">
+          <input type="checkbox" id="useDbConfig" checked>读数据库配置
+        </label>
+      </div>
+      <div class="db-switch-note" id="dbSwitchNote"></div>
+    </div>
+
+    <!-- 一键执行进度面板 -->
+    <div class="card span-2" id="runPanel" style="display:none">
+      <div class="card-title-bar">
+        <h2><span id="runTitle">🚀 执行中</span></h2>
+        <span class="card-note" id="runHint"></span>
+      </div>
+      <div class="log-tools">
+        <button id="logClear" class="ghost-btn" title="清空本次运行的日志显示">🗑 清空</button>
+        <button id="logCopy" class="ghost-btn" title="复制本次运行的日志到剪贴板">📋 复制日志</button>
+        <button id="logExport" class="ghost-btn" title="把本次运行的全部日志导出为 txt 文件，方便排查">💾 导出全部日志</button>
+        <label><input type="checkbox" id="logAutoScroll" checked> 自动滚动</label>
+      </div>
+      <div id="runProgress"></div>
+      <div class="run-btns">
+        <button id="pauseBtn" onclick="togglePause()">⏸ 暂停</button>
+        <button id="cancelBtn" onclick="cancelTask()" class="danger">⏹ 取消任务</button>
+        <button id="closeRun" class="ghost-btn">关闭面板</button>
+      </div>
+    </div>
+
+    <div class="grid">
+
+      <!-- 账号管理 -->
+      <div class="card span-2">
+        <div class="card-title-bar">
+          <h2><span class="ico">👥</span> 账号管理</h2>
+          <span class="card-note">仅显示本浏览器添加的账号，各浏览器互不互通</span>
         </div>
-        <div class="row">
-          <label>ddddocr</label>
-          <input id="ocrEndpoint" placeholder="http://127.0.0.1:7777/ocr">
+        <div style="margin-bottom:10px">
+          <input id="accountSearch" placeholder="🔍 搜索账号（只搜本浏览器列表）" style="width:100%;box-sizing:border-box">
         </div>
-      </div>
-      <!-- 页面配置 -->
-      <div class="card">
-        <h2>页面配置</h2>
-        <div class="tabs">
-          <button class="tab active" data-page="login">登录页 (/player/login)</button>
-          <button class="tab" data-page="cdk">CDK 页 (/index/cdk)</button>
-          <button class="tab" data-page="claim">登录后领取 (/player/index)</button>
-        </div>
-        <div id="pageConfig"></div>
-      </div>
-      <!-- HTML 转选择器 -->
-      <div class="card">
-        <h2>HTML 转选择器 <span style="font-weight:normal;color:#999;font-size:12px">（F12 → 选元素 → 右键 → Copy → Copy outerHTML → 粘贴到此）</span></h2>
-        <textarea id="htmlInput" placeholder="粘贴 HTML 片段，自动解析" style="width:100%;min-height:50px;padding:6px;border:1px solid #ddd;border-radius:3px;font-family:monospace;font-size:12px;resize:vertical"></textarea>
-        <div id="htmlResult" style="margin-top:8px;display:none"></div>
-      </div>
-      <!-- 答案占位符 -->
-      <div class="card">
-        <h2>答案占位符</h2>
-        <p style="font-size:13px;margin:0">
-          在"答案"里可以用：
-          <code class="inline">{username}</code> 当前账号 ·
-          <code class="inline">{password}</code> 当前密码 ·
-          <code class="inline">{cdk}</code> 当前 CDK ·
-          <code class="inline">{date}</code> 今天 YYYY-MM-DD ·
-          <code class="inline">{time}</code> 当前时间 HH:MM:SS
-        </p>
-      </div>
-      <!-- CDK 池（后端管理） -->
-      <div class="card">
-        <h2>CDK 池（后端管理）</h2>
-        <p style="font-size:12px;color:#666;margin:0">
-          CDK 由后端管理，不在面板添加。
-          <br>终端命令：
-          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-daily &lt;code1&gt; [code2 ...]</code>
-          <br>一次性 CDK（跑完一轮自动删）：
-          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk add-once &lt;code&gt;</code>
-          <br>查看/删除/重置：
-          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">python ocr_server.py cdk list</code> ·
-          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk remove &lt;code&gt;</code> ·
-          <code style="background:#f5f5f5;padding:1px 4px;border-radius:2px">cdk reset &lt;code&gt;</code>
-        </p>
-        <div class="table-wrap" style="margin-top:8px">
-          <table id="cdkTable">
+        <div class="table-wrap">
+          <table id="accountTable">
             <thead>
-              <tr><th>CDK</th><th>类型</th><th>状态</th><th>激活</th><th>操作</th></tr>
+              <tr><th>账号</th><th>密码</th><th>启用</th><th>操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
-        <div id="todayActive" style="display:none;margin-top:8px;font-size:13px;color:#1565c0;background:#e3f2fd;padding:6px 10px;border-radius:4px"></div>
-      </div>
-      <!-- 手机扫码（PC 端才有意义） -->
-      <div class="qr-card" id="qrCard" style="display:none">
-        <img id="qrImg" alt="二维码">
-        <div class="qr-text">
-          📱 <b>手机扫码加入控制台</b><br>
-          手机连同一 WiFi，浏览器打开：<br>
-          <code id="qrUrl">--</code>
+        <div class="acct-add-row">
+          <input id="newAccountUser" placeholder="游戏账号" style="flex:1 1 160px;min-width:120px">
+          <input id="newAccountPass" type="password" placeholder="游戏密码" style="flex:1 1 160px;min-width:120px">
+          <button class="primary" id="addAccount">+ 添加账号</button>
+        </div>
+        <div class="acct-batch">
+          <div class="hint">批量导入（每行：<b>账号 密码</b>，可加第三列区，如 <code>123456 密码 六区</code>；留空区=当前区）</div>
+          <textarea id="batchAccountInput" rows="3" placeholder="每行一个账号&#10;user1 pass1 六区&#10;user2 pass2" style="width:100%;box-sizing:border-box;font-family:var(--mono);font-size:12px;resize:vertical"></textarea>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <button class="primary" id="batchImportBtn">📥 批量导入</button>
+            <span id="batchImportStatus" class="card-note"></span>
+          </div>
         </div>
       </div>
-    </div>
-  </aside>
 
-  <div id="msg" class="msg"></div>
-  <input type="file" id="importFile" accept=".json" style="display:none">
+      <!-- 测试兑换（临时账密，跑完入库） -->
+      <div class="card">
+        <div class="card-title-bar">
+          <h2><span class="ico">🧪</span> 测试兑换</h2>
+          <span class="card-note">临时账密，跑完自动入库</span>
+        </div>
+        <div class="test-redeem-row">
+          <input id="testUser" placeholder="游戏账号" style="flex:1 1 140px;min-width:110px">
+          <input id="testPass" type="password" placeholder="游戏密码" style="flex:1 1 140px;min-width:110px">
+          <button class="primary" id="testRedeemBtn">▶ 测试兑换</button>
+          <span id="testRedeemStatus" class="card-note" style="width:100%"></span>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--text-3);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+            <input type="checkbox" id="rememberTest" checked> 记住账密（仅本浏览器）
+          </label>
+          <button id="forgetTestBtn" class="ghost-btn" style="padding:3px 10px;font-size:11px">🗑 忘记账密</button>
+        </div>
+      </div>
 
-  <script>
+      <!-- 账号区查询/修改（要求2：密码校验后查看/修改账号的区） -->
+      <div class="card">
+        <div class="card-title-bar">
+          <h2><span class="ico">🗺️</span> 账号区查询/修改</h2>
+          <span class="card-note">输账号+密码验证，可查看/修改该账号的区</span>
+        </div>
+        <div class="query-box">
+          <input id="regionQueryUser" placeholder="游戏账号" style="flex:1 1 130px;min-width:100px">
+          <input id="regionQueryPass" type="password" placeholder="游戏密码" style="flex:1 1 130px;min-width:100px">
+          <button class="primary" id="regionQueryBtn">查询</button>
+        </div>
+        <div id="regionQueryResult" class="query-result" style="display:none">
+          <div style="font-size:13px;margin-bottom:8px">账号 <b id="regionQueryName"></b> 当前的区：</div>
+          <div id="regionTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+          <div class="query-box" style="margin:0">
+            <span style="font-size:12px;color:var(--text-3)">新增区</span>
+            <input id="regionNewInput" placeholder="输入汉字几区，如：六区" style="flex:1 1 180px">
+            <button id="regionAddBtn">+ 添加</button>
+            <button class="primary" id="regionSaveBtn">保存修改</button>
+          </div>
+          <div class="card-note" style="margin-top:8px">输入汉字几区（如：六区）。定时任务会按账号保存的区逐个跑。</div>
+        </div>
+      </div>
+
+      <!-- CDK 周期设置（要求3：每账号日/周/月码 + 周月起始时间，按区独立） -->
+      <div class="card span-2">
+        <div class="card-title-bar">
+          <h2><span class="ico">📅</span> CDK 周期设置</h2>
+          <span class="card-note">输账号+密码+区，可查看/修改该账号的日/周/月 CDK 与周期起始时间</span>
+        </div>
+        <div class="query-box">
+          <input id="cdkQueryUser" placeholder="游戏账号" style="flex:1 1 120px;min-width:100px">
+          <input id="cdkQueryPass" type="password" placeholder="游戏密码" style="flex:1 1 120px;min-width:100px">
+          <input id="cdkQueryRegion" placeholder="如：六区（留空=默认区）" style="flex:1 1 160px;min-width:120px">
+          <button class="primary" id="cdkQueryBtn">查询</button>
+        </div>
+        <div id="cdkQueryResult" class="query-result" style="display:none">
+          <div style="font-size:13px;margin-bottom:10px">账号 <b id="cdkQueryName"></b>（区：<b id="cdkQueryRegionName"></b>）的 CDK 设置：</div>
+          <div class="query-box" style="margin-bottom:8px">
+            <span style="font-size:12px;color:var(--text-3)">日CDK</span>
+            <input id="cdkDailyInput" style="flex:1 1 130px" placeholder="默认 hmxdy666">
+            <span style="font-size:12px;color:var(--text-3)">周CDK</span>
+            <input id="cdkWeeklyInput" style="flex:1 1 130px" placeholder="默认 hmxdy777">
+            <span style="font-size:12px;color:var(--text-3)">月CDK</span>
+            <input id="cdkMonthlyInput" style="flex:1 1 130px" placeholder="默认 hmxdy888">
+          </div>
+          <div class="query-box" style="margin-bottom:8px">
+            <span style="font-size:12px;color:var(--text-3)">周起始日期</span>
+            <input id="cdkWeeklyStart" type="date" style="flex:1 1 150px">
+            <span style="font-size:12px;color:var(--text-3)">月起始日期</span>
+            <input id="cdkMonthlyStart" type="date" style="flex:1 1 150px">
+            <button class="primary" id="cdkCycleSaveBtn">保存修改</button>
+          </div>
+          <div id="cdkNextPlan" style="font-size:12.5px;color:#1d4ed8;margin-top:8px"></div>
+          <div class="card-note" style="margin-top:8px">周CDK 自起始日期起每 7 天跑一次；月CDK 自起始日期起每 30 天跑一次。起始日期留空 = 每天跑。跑出成功或"上限"后自动记录下次周期（错过会自动补跑）。</div>
+        </div>
+      </div>
+
+    </div><!-- /grid -->
+
+    <!-- 配置抽屉：右下角 ⚙️ 打开（配置收角落，防误动） -->
+    <button id="cfgFab" title="打开配置">⚙️</button>
+    <div id="cfgMask" class="cfg-mask"></div>
+    <aside id="cfgDrawer" class="cfg-drawer" aria-label="配置">
+      <div class="cfg-drawer-head">
+        <b>⚙️ 配置</b>
+        <button id="cfgClose" class="cfg-close" title="关闭">✕</button>
+      </div>
+      <div class="cfg-drawer-body">
+        <!-- 数据管理 -->
+        <div class="card">
+          <h2>数据管理</h2>
+          <div class="cfg-btns">
+            <button id="testOcr">测试 OCR</button>
+            <button id="export">导出 JSON</button>
+            <button id="import">导入 JSON</button>
+            <button id="clear">清空</button>
+          </div>
+        </div>
+        <!-- 域名 / OCR 端点 -->
+        <div class="card">
+          <div class="row" style="margin:0 0 8px">
+            <label>域名</label>
+            <input id="domainInput" placeholder="newxiadan.3f8cz.com">
+          </div>
+          <div class="row">
+            <label>ddddocr</label>
+            <input id="ocrEndpoint" placeholder="http://127.0.0.1:7777/ocr">
+          </div>
+        </div>
+        <!-- 页面配置 -->
+        <div class="card">
+          <h2>页面配置</h2>
+          <div class="tabs">
+            <button class="tab active" data-page="login">登录页 (/player/login)</button>
+            <button class="tab" data-page="cdk">CDK 页 (/index/cdk)</button>
+            <button class="tab" data-page="claim">登录后领取 (/player/index)</button>
+          </div>
+          <div id="pageConfig"></div>
+        </div>
+        <!-- HTML 转选择器 -->
+        <div class="card">
+          <h2>HTML 转选择器 <span class="card-note">（F12 → 选元素 → 右键 → Copy → Copy outerHTML → 粘贴到此）</span></h2>
+          <textarea id="htmlInput" placeholder="粘贴 HTML 片段，自动解析" style="width:100%;min-height:50px;resize:vertical;font-family:var(--mono);font-size:12px"></textarea>
+          <div id="htmlResult" style="margin-top:8px;display:none"></div>
+        </div>
+        <!-- 答案占位符 -->
+        <div class="card">
+          <h2>答案占位符</h2>
+          <p style="font-size:13px;margin:0;line-height:1.8">
+            在"答案"里可以用：
+            <code class="inline">{username}</code> 当前账号 ·
+            <code class="inline">{password}</code> 当前密码 ·
+            <code class="inline">{cdk}</code> 当前 CDK ·
+            <code class="inline">{date}</code> 今天 YYYY-MM-DD ·
+            <code class="inline">{time}</code> 当前时间 HH:MM:SS
+          </p>
+        </div>
+        <!-- CDK 池（后端管理） -->
+        <div class="card">
+          <h2>CDK 池（后端管理）</h2>
+          <p style="font-size:12px;color:var(--text-2);margin:0;line-height:1.8">
+            CDK 由后端管理，不在面板添加。<br>
+            终端命令：
+            <code style="background:var(--card);padding:2px 6px;border-radius:5px;border:1px solid var(--border)">python ocr_server.py cdk add-daily &lt;code1&gt; [code2 ...]</code><br>
+            一次性 CDK（跑完一轮自动删）：
+            <code style="background:var(--card);padding:2px 6px;border-radius:5px;border:1px solid var(--border)">python ocr_server.py cdk add-once &lt;code&gt;</code><br>
+            查看/删除/重置：
+            <code style="background:var(--card);padding:2px 6px;border-radius:5px;border:1px solid var(--border)">python ocr_server.py cdk list</code> ·
+            <code style="background:var(--card);padding:2px 6px;border-radius:5px;border:1px solid var(--border)">cdk remove &lt;code&gt;</code> ·
+            <code style="background:var(--card);padding:2px 6px;border-radius:5px;border:1px solid var(--border)">cdk reset &lt;code&gt;</code>
+          </p>
+          <div class="table-wrap" style="margin-top:10px">
+            <table id="cdkTable">
+              <thead>
+                <tr><th>CDK</th><th>类型</th><th>状态</th><th>激活</th><th>操作</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="todayActive" style="display:none;margin-top:10px;font-size:13px;color:#1d4ed8;background:#e8f0fe;padding:8px 12px;border-radius:8px"></div>
+        </div>
+        <!-- 手机扫码（PC 端才有意义） -->
+        <div class="qr-card" id="qrCard" style="display:none">
+          <img id="qrImg" alt="二维码">
+          <div class="qr-text">
+            📱 <b>手机扫码加入控制台</b><br>
+            手机连同一 WiFi，浏览器打开：<br>
+            <code id="qrUrl">--</code>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div id="msg" class="msg"></div>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+  </div>
+
+<script>
     const $ = (id) => document.getElementById(id);
     const STORAGE_KEY = "autofill_configs_v3";
     const REGION_MEMORY_KEY = "ocr_current_region_v1";
+    // 任务2：读数据库配置开关（只存本浏览器，各浏览器互不互通）
+    const USE_DB_KEY = "ocr_use_db_config_v1";
+    function loadUseDbPref() { try { return localStorage.getItem(USE_DB_KEY) !== "0"; } catch (e) { return true; } }
+    function saveUseDbPref(v) { try { localStorage.setItem(USE_DB_KEY, v ? "1" : "0"); } catch (e) {} }
+    function refreshDbSwitchNote() {
+      const el = $("useDbConfig");
+      const note = $("dbSwitchNote");
+      if (!el || !note) return;
+      const on = el.checked;
+      note.innerHTML = on
+        ? '💾 <b>读数据库配置：已开启</b> —— 执行时优先读取数据库里该账号的区/CDK周期；没有该账号则用本页面配置跑。执行成功都会自动入库。'
+        : '💾 <b>读数据库配置：已关闭</b> —— 执行时只用本页面配置，不读数据库。执行成功仍会自动入库。';
+    }
 
     // ---------- 配置抽屉（右下角 ⚙️，收角落防误动） ----------
     function openCfg() {
@@ -788,6 +1051,12 @@
           body: JSON.stringify({ id })
         });
         loadCdksFromServer();
+      // 任务2：读数据库配置开关初始化（本浏览器记忆）
+      if ($("useDbConfig")) {
+        $("useDbConfig").checked = loadUseDbPref();
+        $("useDbConfig").onchange = function () { saveUseDbPref(this.checked); refreshDbSwitchNote(); };
+      }
+      refreshDbSwitchNote();
       } catch (e) { showMsg("error", "删除失败"); }
     }
 
@@ -1040,7 +1309,7 @@
         const r = await fetch(SERVER + "/api/test-redeem", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p, regions: [currentRegionValue()] })
+          body: JSON.stringify({ username: u, password: p, regions: [currentRegionValue()], useDb: loadUseDbPref() })
         });
         const d = await r.json();
         if (d.error) {
@@ -1049,7 +1318,7 @@
           $("testRedeemBtn").disabled = false;
           return;
         }
-        $("testRedeemStatus").textContent = `跑中（用 ${d.cdk_count} 个 CDK）… job=${d.job_id.slice(0,8)}`;
+        $("testRedeemStatus").textContent = `跑中… job=${d.job_id.slice(0,8)}`;
         // 轮询状态
         const poll = setInterval(async () => {
           try {
@@ -1059,8 +1328,9 @@
               clearInterval(poll);
               $("testRedeemBtn").disabled = false;
               if (sd.saved === false) {
-                $("testRedeemStatus").innerHTML = '<span style="color:#c62828">✗ ' + (sd.save_reason || "账密错") + '</span>';
-                showMsg("error", "账密错，未入库");
+                const reason = sd.save_reason || "账密错误";
+                $("testRedeemStatus").innerHTML = '<span style="color:#c62828">✗ ' + reason + '，未入库</span>';
+                showMsg("error", reason + "，未入库，请重跑");
               } else if (sd.saved === true) {
                 $("testRedeemStatus").innerHTML = '<span style="color:#2e7d32">✓ ' + (sd.save_reason || "已入库") + '</span>';
                 showMsg("success", "已入库账号：" + u);
@@ -1085,6 +1355,30 @@
     // ---------- 当前区：操作栏上方的文本框，同步到 CDK页#server / 领取页#giftServer ----------
     // 单向联动：文本框 → 页面配置里的区下拉框
     const REGION_SELECTORS = ["#server", "#giftServer"];
+    // 数字区 → 汉字区（"4区"→"四区"），区输入框 blur 时自动转换
+    function numToCn(n) {
+      const d = "零一二三四五六七八九";
+      if (n <= 0 || n >= 1000) return String(n);
+      if (n < 10) return d[n];
+      if (n < 20) return "十" + (n % 10 ? d[n % 10] : "");
+      if (n < 100) return d[Math.floor(n / 10)] + "十" + (n % 10 ? d[n % 10] : "");
+      const h = d[Math.floor(n / 100)] + "百", t = n % 100;
+      if (!t) return h;
+      if (t < 10) return h + "零" + d[t];
+      return h + numToCn(t);
+    }
+    function normalizeRegionText(v) {
+      if (!v) return v;
+      const s = String(v).trim();
+      const m = s.match(/^第?(\d+)\s*区$/);
+      return m ? numToCn(parseInt(m[1], 10)) + "区" : s;
+    }
+    function bindRegionNormalize() {
+      ["currentRegion", "regionNewInput", "cdkQueryRegion"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("blur", () => { const nv = normalizeRegionText(el.value); if (nv !== el.value) el.value = nv; });
+      });
+    }
     function currentRegionValue() {
       const v = ($("currentRegion").value || "").trim();
       return v || "六区";
@@ -1342,6 +1636,7 @@
       renderCdk();
       renderPageConfig();
       refreshRegionInput();
+      bindRegionNormalize();
       syncConfigToServer();
     };
 
@@ -1440,7 +1735,7 @@
         const resp = await fetch(SERVER + "/api/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config: cfg })
+          body: JSON.stringify({ config: cfg, useDb: loadUseDbPref() })
         });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
@@ -1586,6 +1881,10 @@
 
     // 初始化
     (async function init() {
+      // 0. file:// 本地打开提示（浏览器禁止 file:// 访问 /api，避免用户以为坏了）
+      if (location.protocol === "file:") {
+        showMsg("error", "当前以本地文件方式打开，/api 接口不可用（浏览器禁止 file:// 访问）。请通过服务器地址访问，例如 http://<服务器IP>:7777/");
+      }
       // 1. 优先读本浏览器 localStorage：各浏览器配置隔离，别人的配置不显示
       const all = loadAll();
       const domKeys = Object.keys(all);
@@ -1660,3 +1959,4 @@
   </script>
 </body>
 </html>
+

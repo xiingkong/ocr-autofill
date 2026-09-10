@@ -290,6 +290,32 @@ def db_get_accounts(include_password=False):
     else:
         return [{"id": r[0], "username": r[1], "regions": _parse_regions(r[3])} for r in rows]
 
+def db_find_account(username, password):
+    """查「用户名+密码都匹配」的账号记录（统一执行逻辑用）。
+    匹配返回 dict（含 regions / 日周月 CDK 码），否则返回 None。
+    密码解密后比对，兼容旧库明文/PLAIN 前缀。"""
+    if not username or not password:
+        return None
+    conn = _db_conn()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id, game_account, game_password, regions, cdk_daily, cdk_weekly, cdk_monthly FROM accounts WHERE game_account=?", (username,))
+        row = c.fetchone()
+        if not row:
+            return None
+        if _decrypt_password(row[2]) != password:
+            return None
+        return {
+            "id": row[0],
+            "username": row[1],
+            "regions": _parse_regions(row[3]),
+            "cdk_daily": row[4] or "hmxdy666",
+            "cdk_weekly": row[5] or "hmxdy777",
+            "cdk_monthly": row[6] or "hmxdy888",
+        }
+    finally:
+        conn.close()
+
 def db_upsert_account(game_account, game_password, regions=None):
     """按 game_account 去重：存在+密码不同→更新，存在+相同→跳过，不存在→新增
     密码在写入前加密存储（Fernet）。
@@ -332,7 +358,7 @@ def db_get_account_row(game_account):
 
 def db_add_account_regions(game_account, regions):
     """给已有账号追加区（去重）。账号不存在返回 None。返回更新后的区列表。"""
-    cleaned = [str(r).strip() for r in (regions or []) if str(r).strip()]
+    cleaned = [_normalize_region(str(r)) for r in (regions or []) if str(r).strip()]
     if not cleaned:
         return None
     row = db_get_account_row(game_account)
@@ -364,7 +390,7 @@ def db_set_account_regions(game_account, regions):
     """覆盖式写入账号的区列表（去重保序）。账号不存在返回 None。"""
     seen = []
     for r in (regions or []):
-        r = str(r).strip()
+        r = _normalize_region(str(r))
         if r and r not in seen:
             seen.append(r)
     row = db_get_account_row(game_account)
@@ -415,7 +441,7 @@ def db_get_cdk_cycle(username, region):
     try:
         c = conn.cursor()
         c.execute("SELECT weekly_start, monthly_start, weekly_last, monthly_last, weekly_next, monthly_next FROM account_cdk_cycles WHERE username=? AND region=?",
-                  (username, region or ""))
+                  (username, _normalize_region(region) or ""))
         row = c.fetchone()
         if not row:
             return {}
@@ -427,6 +453,7 @@ def db_get_cdk_cycle(username, region):
 
 def db_set_cdk_cycle(username, region, weekly_start=None, monthly_start=None):
     """写入/更新 账号×区 的周/月起始时间。传 None = 不改；传空字符串 = 清空（该码每天跑）。"""
+    region = _normalize_region(region)
     cur = db_get_cdk_cycle(username, region)
     w = (weekly_start if weekly_start is not None else cur.get("weekly_start", "") or "").strip()
     m = (monthly_start if monthly_start is not None else cur.get("monthly_start", "") or "").strip()
@@ -653,6 +680,68 @@ WRONG_PWD_KEYWORDS = ["账号或密码错误", "密码错误", "密码不正确"
 MAX_CAPTCHA_RETRY = 3
 # 页面没加载好（验证码图 src 空 / 按钮禁用 loading）时的整页刷新重试上限
 MAX_PAGE_RELOADS = 3
+
+class _ClaimStuck(Exception):
+    """领取页操作卡死（按钮禁用/页面卡加载等），需刷新页面并重跑整个领取流程"""
+    pass
+
+# ---- 任务清单补完：并发防重 / 任务记录上限 / 区与域名规范化 ----
+MAX_JOBS_KEPT = 20          # JOBS 内存只保留最近 20 条完成记录，防泄漏
+_ACCOUNT_RUNNING = {}       # username -> job_id（该账号正在被哪个任务操作）
+_ACCOUNT_RUNNING_LOCK = threading.Lock()
+
+def _num_to_cn(n):
+    """阿拉伯数字转中文数字（1→一，10→十，12→十二，101→一百零一）；超范围原样返回"""
+    _d = "零一二三四五六七八九"
+    if not isinstance(n, int) or n <= 0 or n >= 1000:
+        return str(n)
+    if n < 10:
+        return _d[n]
+    if n < 20:
+        return "十" + (_d[n % 10] if n % 10 else "")
+    if n < 100:
+        return _d[n // 10] + "十" + (_d[n % 10] if n % 10 else "")
+    h = _d[n // 100] + "百"
+    t = n % 100
+    if t == 0:
+        return h
+    if t < 10:
+        return h + "零" + _d[t]
+    return h + _num_to_cn(t)
+
+def _normalize_region(r):
+    """把「4区」「4 区」「第4区」等数字写法统一为汉字「四区」；已是汉字/其他原样返回"""
+    if r is None:
+        return r
+    s = str(r).strip()
+    import re as _re
+    m = _re.match(r"^第?(\d+)\s*区$", s)
+    if not m:
+        return s
+    return _num_to_cn(int(m.group(1))) + "区"
+
+def _normalize_domain(d):
+    """剥离协议/路径/查询/尾斜杠，只留 host[:port]（防拼出 https://http://xxx）"""
+    if not d:
+        return d
+    s = str(d).strip()
+    import re as _re
+    s = _re.sub(r"^https?://", "", s, flags=_re.I)
+    s = s.split("/")[0].split("?")[0].strip()
+    return s
+
+def _cleanup_old_jobs():
+    """任务记录只保留最近 MAX_JOBS_KEPT 条已完成记录（防内存泄漏）"""
+    try:
+        with JOBS_LOCK:
+            _done = [(jid, j.get("started") or 0) for jid, j in JOBS.items()
+                     if j.get("status") in ("done", "error", "cancelled")]
+            if len(_done) > MAX_JOBS_KEPT:
+                _done.sort(key=lambda x: x[1])  # 最旧的在前
+                for jid, _ in _done[:len(_done) - MAX_JOBS_KEPT]:
+                    JOBS.pop(jid, None)
+    except Exception:
+        pass
 # 验证码上下文：OCR 时设置，click 时检查并清空
 class _CaptchaCtxProxy:
     """线程隔离的验证码上下文：每个线程一份 dict，并行跑互不串数据。
@@ -1013,18 +1102,10 @@ def _safe_click(page, selector, emit, timeout=15000):
                     continue
                 raise
             if "element is not enabled" in msg:
-                # 按钮禁用（proxy-btn-loading 等页面卡加载）→ 刷新整个页面重试
-                captcha_ctx["page_reloads"] += 1
-                if captcha_ctx["page_reloads"] > MAX_PAGE_RELOADS:
-                    raise
-                if emit:
-                    emit(f"  ⚠ 按钮 {selector} 禁用（页面可能卡加载），刷新页面重试（第 {captcha_ctx['page_reloads']}/{MAX_PAGE_RELOADS} 次）", "warn")
-                try:
-                    page.reload(wait_until="commit")
-                except Exception:
-                    pass
-                time.sleep(1.5)
-                continue
+                # 按钮禁用（proxy-btn-loading 等页面卡加载）→ 抛给领取流程统一处理：
+                # 刷新页面后重跑整个领取流程（重新选角色→加购→提交）。只重试点同一按钮没用，
+                # 因为刷新后购物车/角色状态已丢失（任务1）
+                raise _ClaimStuck(f"{selector} 按钮禁用（页面可能卡加载）")
             raise
 
 
@@ -1973,7 +2054,12 @@ def do_op(page, op, account, cdk, emit):
     if action == "fill":
         page.wait_for_selector(selector, timeout=10000)
         page.fill(selector, value)
-        emit(f"  ✓ 填: {selector} = {value[:30]}{'...' if len(value)>30 else ''}")
+        # 密码脱敏：密码框不输出明文（日志可导出，防泄露）
+        if "password" in selector.lower() or "pwd" in selector.lower():
+            _show = (value[:1] + "****") if value else "(空)"
+            emit(f"  ✓ 填: {selector} = {_show}（已脱敏）")
+        else:
+            emit(f"  ✓ 填: {selector} = {value[:30]}{'...' if len(value)>30 else ''}")
 
     elif action == "click":
         page.wait_for_selector(selector, timeout=10000)
@@ -2218,6 +2304,7 @@ def run_job(job_id, config):
             emit(f"✗ 异常: {e}", "error")
             emit(traceback.format_exc(), "error")
             JOBS[job_id]["status"] = "error"
+        _cleanup_old_jobs()
 
     threading.Thread(target=th, daemon=True).start()
 
@@ -2312,6 +2399,7 @@ def _scheduler_loop():
                             print(f"[scheduler] 任务异常: {e}", flush=True)
                             print(traceback.format_exc(), flush=True)
                             JOBS[jid]["status"] = "error"
+                        _cleanup_old_jobs()
                     threading.Thread(target=_sched_th, daemon=True).start()
         except Exception as e:
             print(f"[scheduler] 异常: {e}", flush=True)
@@ -2367,7 +2455,7 @@ def _run_job_impl(job_id, config, emit):
 
     cdk_list = config.get("cdkList", [])
     pages_cfg = config.get("pages", {})
-    domain = config.get("domain", "")
+    domain = _normalize_domain(config.get("domain", ""))
     browser_type = (config.get("browserType") or os.environ.get("BROWSER_TYPE") or "msedge").lower()
     launch_kwargs = {
         "headless": config.get("headless", True),  # 改回 True
@@ -2531,7 +2619,7 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
         _regs = _acc.get("regions")
         if isinstance(_regs, list) and _regs:
             for _r in _regs:
-                run_units.append({"account": _acc, "region": str(_r).strip()})
+                run_units.append({"account": _acc, "region": _normalize_region(str(_r))})
         else:
             run_units.append({"account": _acc, "region": None})
 
@@ -2636,6 +2724,13 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         acc = unit["account"]
                         region = unit["region"]
                         acc_user = acc.get("username", "?")
+                        # 账号级防重：同一账号正在被其他任务操作 → 本轮跳过（防两批入口同时跑同一账号）
+                        with _ACCOUNT_RUNNING_LOCK:
+                            _holder = _ACCOUNT_RUNNING.get(acc_user)
+                            if _holder and _holder != job_id:
+                                emit(f"  ⚠ 账号 {acc_user} 正在被其他任务（{_holder[:8]}）操作，本轮跳过", "warn")
+                                continue
+                            _ACCOUNT_RUNNING[acc_user] = job_id
                         # 每账号开始前重置验证码状态
                         captcha_ctx["last_result"] = None
                         captcha_ctx["attempts"] = 0
@@ -2723,9 +2818,18 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                             emit(f"  ⚠ 领取页 #giftServer 等不到（第 {_try_n}/3 次），已刷新页面重试", "warn")
                                             time.sleep(1)
                                             continue
+                                        if isinstance(e, _ClaimStuck) and _try_n < 3:
+                                            # 提交按钮禁用/页面卡加载：刷新后重跑整个领取流程（重新选区→获取角色→选角色→加购→提交）
+                                            try:
+                                                page.reload(wait_until="commit")
+                                            except Exception:
+                                                pass
+                                            emit(f"  ⚠ 领取页卡住（{e}），刷新后重跑领取流程（第 {_try_n}/3 次）", "warn")
+                                            time.sleep(1.5)
+                                            continue
                                         emit(f"  ✗ 领取失败: {e}", "error")
-                                        # 刷新 3 次仍等不到 #giftServer → 跟验证码错误一样进下一轮重试
-                                        if "#giftServer" in str(e):
+                                        # 刷新 3 次仍不行（#giftServer 等不到 / 按钮禁用卡死）→ 跟验证码错误一样进下一轮重试
+                                        if "#giftServer" in str(e) or isinstance(e, _ClaimStuck):
                                             captcha_ctx["last_result"] = "failure"
                                         break
                                 done += 1
@@ -2816,6 +2920,22 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                             acc_user = acc.get("username", "?")
                             emit(f"  ⚠ 账号 {acc_user}（区: {region or '默认'}）验证码失败，加入下一轮重试", "warn")
                             next_remaining.append(unit)
+                        elif last == "success":
+                            # 任务2：手动/测试入口跑成功 → 自动入库（账号+区），下次执行直接走数据库配置
+                            # 定时/now 入口不重复入库（账号本来就在数据库）
+                            _trig = (JOBS.get(job_id) or {}).get("trigger")
+                            if _trig in ("manual", "test-redeem"):
+                                _u = acc.get("username", "")
+                                _p = acc.get("password", "")
+                                if _u and _p:
+                                    try:
+                                        _act = db_upsert_account(_u, _p)
+                                        _regs = acc.get("regions")
+                                        if isinstance(_regs, list) and _regs:
+                                            db_add_account_regions(_u, _regs)
+                                        emit(f"  ✓ 账号 {_u} 执行成功，已自动入库（下次执行直接走数据库配置）", "success")
+                                    except Exception as _e:
+                                        emit(f"  ⚠ 账号 {_u} 入库失败: {_e}", "warn")
                     # 本轮结束：更新 remaining + round
                     if not next_remaining:
                         emit("\n✅ 所有账号验证码都已通过")
@@ -2823,11 +2943,21 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                     else:
                         remaining_units = next_remaining
                         round_num += 1
+                    # 本轮结束：清除本任务标记的账号（下轮重新竞争）
+                    with _ACCOUNT_RUNNING_LOCK:
+                        for _u in list(_ACCOUNT_RUNNING):
+                            if _ACCOUNT_RUNNING[_u] == job_id:
+                                del _ACCOUNT_RUNNING[_u]
                 if remaining_units:
                     emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_units)} 个账号验证码失败: {[u['account'].get('username','?') for u in remaining_units]}", "warn")
             finally:
                 try: browser.close()
                 except: pass
+                # 兜底清除本任务的账号标记（异常中断也不残留）
+                with _ACCOUNT_RUNNING_LOCK:
+                    for _u in list(_ACCOUNT_RUNNING):
+                        if _ACCOUNT_RUNNING[_u] == job_id:
+                            del _ACCOUNT_RUNNING[_u]
     except _JobCancelled:
         with JOBS_LOCK:
             job = JOBS.get(job_id)
@@ -3251,6 +3381,21 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == '/api/run':
                 body = self._read_body()
                 cfg = body.get("config", {})
+                use_db = body.get("useDb", True)
+                # 任务2：开关开时，每个账号优先读数据库配置（区）——有匹配账密用库的区，否则保留前端本地
+                if use_db:
+                    _accs = []
+                    for _a in (cfg.get("accounts") or []):
+                        _rec = db_find_account(_a.get("username", ""), _a.get("password", ""))
+                        if _rec and _rec.get("regions"):
+                            _aa = dict(_a)
+                            _aa["regions"] = _rec["regions"]
+                            _accs.append(_aa)
+                        else:
+                            _accs.append(_a)
+                    cfg["accounts"] = _accs
+                # 任务2：统一走账号级 CDK（每账号日/周/月码 + once 池），不再用前端本地全局池
+                cfg["accountCdks"] = True
                 jid = uuid.uuid4().hex
                 # 保存最新 config 给定时任务用
                 global LAST_CONFIG
@@ -3258,8 +3403,8 @@ class Handler(BaseHTTPRequestHandler):
                 run_job(jid, cfg)
                 self._json(200, {"job_id": jid})
             elif self.path == '/api/test-redeem':
-                # 测试兑换：用前端临时输入的账密 + 用后端 CDK 池跑一次
-                # 账密错 → 不入库；成功/其他 → 入库
+                # 任务2：测试兑换 = 临时账密 + 账号级日/周/月码（有 db 匹配走 db 区/码，无则前端区+默认码）
+                # 结果三分类：账密错→不入库；验证码5轮失败→不入库；成功→serial 已自动入库
                 body = self._read_body()
                 username = (body.get("username") or "").strip()
                 password = (body.get("password") or "").strip()
@@ -3267,28 +3412,23 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"error": "账号密码不能为空"})
                 regions = body.get("regions")
                 req_regions = [str(r).strip() for r in regions if str(r).strip()] if isinstance(regions, list) else []
-                # 过滤可用 CDK：daily 一直是 0（可反复跑），once 用完才变 1（用过的过滤掉）
-                active_cdks = []
-                for c in db_get_cdks():
-                    if c["used"]:
-                        continue
-                    if c["once"]:
-                        active_cdks.append({"code": c["code"], "schedule": "once", "used": False})
-                    else:
-                        active_cdks.append({"code": c["code"], "schedule": "daily", "used": False})
-                if not active_cdks:
-                    return self._json(400, {"error": "后端 CDK 池为空，请先用 cdk add-daily 加"})
-                # 组装 config（只跑 cdk target，但实际 _run_job_impl 会跑 login+cdk）
+                use_db = body.get("useDb", True)
+                # 开关开：查数据库有没有该账密（用户名+密码都匹配）
+                db_rec = db_find_account(username, password) if use_db else None
+                pages_cfg = (LAST_CONFIG.get("pages") if LAST_CONFIG else None) or (json.load(open(CONFIG_FILE, encoding="utf-8")).get("pages", {}) if os.path.exists(CONFIG_FILE) else {})
                 cfg = {
                     "domain": LAST_CONFIG.get("domain", "newxiadan.3f8cz.com") if LAST_CONFIG else "newxiadan.3f8cz.com",
-                    "pages": (LAST_CONFIG.get("pages") if LAST_CONFIG else None) or json.load(open(CONFIG_FILE, encoding="utf-8")).get("pages", {}) if os.path.exists(CONFIG_FILE) else {},
+                    "pages": pages_cfg,
                     "accounts": [{"username": username, "password": password}],
-                    "cdkList": active_cdks,
+                    "cdkList": [],
                     "runTargets": ["login", "claim", "cdk"],
+                    "accountCdks": True,   # 任务2：统一账号级日/周/月码（serial 读 db 码，无记录用默认 666/777/888）
                 }
-                # 测试兑换按前端传来的区跑（覆盖页面配置里的区下拉框）
-                if req_regions:
-                    cfg["pages"] = _override_region_selects(cfg.get("pages") or {}, req_regions[0])
+                # 区：开关开且有 db 匹配（且 db 有区）→ 用 db 的区（serial 会逐区跑）；否则用前端传的区
+                if db_rec and db_rec.get("regions"):
+                    cfg["accounts"][0]["regions"] = db_rec["regions"]
+                elif req_regions:
+                    cfg["accounts"][0]["regions"] = req_regions
                 jid = uuid.uuid4().hex
                 JOBS[jid] = {
                     "status": "running", "log": [], "result": None, "started": time.time(),
@@ -3307,27 +3447,21 @@ class Handler(BaseHTTPRequestHandler):
                             with job["cond"]:
                                 job["cond"].notify_all()
                         _run_job_impl(jid, cfg, _emit)
-                        # 跑完后判断结果：查日志有没有"账密错误"关键词
+                        # 跑完后判断结果（入库由 serial 统一做，这里只做状态分类）
                         with JOBS_LOCK:
                             job = JOBS.get(jid)
                             log = job.get("log", []) if job else []
                         wrong_pwd = any("账密错误" in item.get("msg", "") for item in log)
+                        captcha_fail = any(("仍有" in item.get("msg", "") and "验证码失败" in item.get("msg", "")) for item in log)
                         if wrong_pwd:
-                            # 账密错：不入库
                             with JOBS_LOCK:
-                                if job: job["saved"] = False; job["save_reason"] = "账密错"
+                                if job: job["saved"] = False; job["save_reason"] = "账密错误"
+                        elif captcha_fail:
+                            with JOBS_LOCK:
+                                if job: job["saved"] = False; job["save_reason"] = "验证码错误，请重跑"
                         else:
-                            # 没账密错：入库 + 追加区
-                            action = db_upsert_account(username, password)
-                            updated_regions = db_add_account_regions(username, req_regions) if req_regions else None
                             with JOBS_LOCK:
-                                if job:
-                                    job["saved"] = True
-                                    job["save_action"] = action
-                                    job["save_reason"] = f"成功入库（{action}）"
-                                    if updated_regions is not None:
-                                        job["save_reason"] += f"，区: {'/'.join(updated_regions)}"
-                            print(f"[test-redeem] 账密入库: {action}, regions={updated_regions}", flush=True)
+                                if job: job["saved"] = True; job["save_reason"] = "已入库"
                     except Exception as e:
                         import traceback
                         print(f"[test-redeem] 异常: {e}", flush=True)
@@ -3335,8 +3469,9 @@ class Handler(BaseHTTPRequestHandler):
                         with JOBS_LOCK:
                             job = JOBS.get(jid)
                             if job: job["status"] = "error"
+                    _cleanup_old_jobs()
                 threading.Thread(target=_test_th, daemon=True).start()
-                self._json(200, {"job_id": jid, "cdk_count": len(active_cdks)})
+                self._json(200, {"job_id": jid, "cdk_count": 0})
             elif self.path.startswith('/picker/start'):
                 qs = parse_qs(urlparse(self.path).query)
                 body = self._read_body()
