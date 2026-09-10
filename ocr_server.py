@@ -829,7 +829,7 @@ def preprocess_denoise(img_bytes, scale=2):
         return None
 
 # 验证码识别统计：共享计数（任务内所有 worker 线程合计；任务开始 _reset_ocr_stats，结束 _finalize_ocr_stats）
-_ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "method_hits": {}}
+_ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "verr": 0, "method_hits": {}}
 _ocr_stats_lock = threading.Lock()
 
 def _reset_ocr_stats():
@@ -856,6 +856,9 @@ def _finalize_ocr_stats(emit):
         return   # 一轮都没识别到验证码 → 不写空统计文件
     total = st.get("total", 0) or 0
     ok = st.get("ok", 0) or 0
+    verr = st.get("verr", 0) or 0
+    real_total = ok                       # 真实正确率总数 = 识别出 4-5 位合法结果的次数
+    real_ok = max(ok - verr, 0)           # 真实正确成功 = 总数 - 验证码错误次数
     stats = {
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": total,
@@ -863,11 +866,16 @@ def _finalize_ocr_stats(emit):
         "rate": round(ok * 100.0 / total, 1) if total else 0.0,
         "allfail": st.get("allfail", 0) or 0,
         "badlen": st.get("badlen", 0) or 0,
+        "verr": verr,
+        "real_total": real_total,
+        "real_ok": real_ok,
+        "real_rate": round(real_ok * 100.0 / real_total, 1) if real_total else 0.0,
         "method_hits": st.get("method_hits", {}) or {},
     }
     try:
-        emit("📊 验证码识别统计：成功 {ok}/{total}（{rate}%）｜全失败 {allfail}｜长度异常 {badlen}｜方法命中 {hits}".format(
+        emit("📊 验证码识别统计：识别合法 {ok}/{total}（{rate}%）｜真实正确 {real_ok}/{real_total}（{real_rate}%，扣验证码错误 {verr}）｜全失败 {allfail}｜长度异常 {badlen}｜方法命中 {hits}".format(
             ok=stats["ok"], total=stats["total"], rate=stats["rate"],
+            real_ok=stats["real_ok"], real_total=stats["real_total"], real_rate=stats["real_rate"], verr=stats["verr"],
             allfail=stats["allfail"], badlen=stats["badlen"],
             hits=json.dumps(stats["method_hits"], ensure_ascii=False)), "info")
         with open(OCR_STATS_FILE, "w", encoding="utf-8") as f:
@@ -1115,10 +1123,9 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
     验证码图加载：3 次循环（5s 等）→ 不行就点击换图 → 再 3 次循环——实在不行才放弃"""
     # 等图片加载（关键：超时不能静默吞——否则截图到空白/损坏图会 OCR 出乱码）
     loaded = False
-    total_waits = 0  # 累计 wait 次数，超过 3 次就点图换
     click_retry = 0  # 已点图换的次数
     MAX_CLICK_RETRY = 3  # 最多点图换 3 次
-    while total_waits < 3 and click_retry <= MAX_CLICK_RETRY:
+    while click_retry <= MAX_CLICK_RETRY:
         try:
             page.wait_for_function(
                 "sel => { const el = document.querySelector(sel); return el && el.complete && el.naturalWidth > 0; }",
@@ -1128,7 +1135,6 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
             loaded = True
             break
         except Exception as e:
-            total_waits += 1
             # 页面没加载好（验证码图 src 为空）→ 刷新整个页面重试（最多 MAX_PAGE_RELOADS 次）
             try:
                 _src_empty = not (page.eval_on_selector(image_sel, "el => el.getAttribute('src') || ''") or "")
@@ -1145,27 +1151,21 @@ def ocr_with_preprocess_and_pick_best(page, image_sel, emit):
                 except Exception:
                     pass
                 time.sleep(1.5)
-                total_waits = 0
                 click_retry = 0
                 continue
-            if total_waits < 3:
-                emit(f"  ⚠ 验证码图未加载完成（naturalWidth=0），延 1s 再等（第 {total_waits}/3 次）", "warn")
-                time.sleep(1.0)
+            # 只延 1s 等一次（不再 3 次循环），未加载就直接点击验证码刷新
+            emit(f"  ⚠ 验证码图未加载完成（naturalWidth=0），延 1s 后点击验证码刷新（第 {click_retry + 1}/{MAX_CLICK_RETRY} 次）", "warn")
+            time.sleep(1.0)
+            if click_retry < MAX_CLICK_RETRY:
+                click_retry += 1
+                try:
+                    _safe_click(page, image_sel, emit, timeout=15000)
+                except Exception as ce:
+                    emit(f"  ✗ 点击图刷新失败: {ce}", "error")
+                    break
+                time.sleep(1.5)
             else:
-                # 3 次 wait 都未加载——点击验证图刷新
-                if click_retry < MAX_CLICK_RETRY:
-                    click_retry += 1
-                    emit(f"  ⚠ 验证码图 3 次 wait 未加载，点击图刷新（第 {click_retry}/{MAX_CLICK_RETRY} 次）", "warn")
-                    try:
-                        _safe_click(page, image_sel, emit, timeout=15000)
-                    except Exception as ce:
-                        emit(f"  ✗ 点击图刷新失败: {ce}", "error")
-                        break
-                    # 等 1-2.5s（先 1.5s，不行延 1s 再等 1s）
-                    time.sleep(1.5)
-                    total_waits = 0  # 重置 wait 计数，开始下一轮 3 次
-                else:
-                    emit(f"  ✗ 验证码图点击刷新 {MAX_CLICK_RETRY} 次仍未加载，放弃本次 OCR: {type(e).__name__}", "error")
+                emit(f"  ✗ 验证码图点击刷新 {MAX_CLICK_RETRY} 次仍未加载，放弃本次 OCR: {type(e).__name__}", "error")
     if not loaded:
         return None, None
     # 截图
@@ -1260,6 +1260,7 @@ def retry_captcha_after_click(page, submit_selector, emit):
     # 重试循环
     while captcha_ctx["attempts"] < MAX_CAPTCHA_RETRY:
         captcha_ctx["attempts"] += 1
+        _stats_bump("verr")  # 验证码真实正确率：记录一次"验证码错误"（提交被服务器拒绝）
         emit(f"  ⚠ 检测到验证码错误，重试 ({captcha_ctx['attempts']}/{MAX_CAPTCHA_RETRY})")
         # 刷图
         if not refresh_captcha_image(page, captcha_ctx["image_sel"], emit):
@@ -2096,20 +2097,29 @@ def do_op(page, op, account, cdk, emit):
             except Exception:
                 # 真没好就用现在的 options 继续（可能真的只有 0~1 个）
                 pass
-        opts = page.eval_on_selector(sel, "el => Array.from(el.options).map(o => ({v: o.value, t: o.textContent}))")
-        chosen = None
-        if val.startswith("#"):
-            idx = int(val[1:]) - 1
-            if 0 <= idx < len(opts):
-                chosen = opts[idx]["v"]
-        elif val.isdigit():
-            idx = int(val) - 1
-            if 0 <= idx < len(opts):
-                chosen = opts[idx]["v"]
-        else:
-            for o in opts:
-                if val in o["t"] or val in o["v"]:
-                    chosen = o["v"]
+        def _pick_option():
+            _opts = page.eval_on_selector(sel, "el => Array.from(el.options).map(o => ({v: o.value, t: o.textContent}))")
+            if val.startswith("#"):
+                _idx = int(val[1:]) - 1
+                if 0 <= _idx < len(_opts):
+                    return _opts[_idx]["v"], _opts
+            elif val.isdigit():
+                _idx = int(val) - 1
+                if 0 <= _idx < len(_opts):
+                    return _opts[_idx]["v"], _opts
+            else:
+                for _o in _opts:
+                    if val in _o["t"] or val in _o["v"]:
+                        return _o["v"], _opts
+            return None, _opts
+
+        chosen, opts = _pick_option()
+        # 没匹配到目标选项 → 等 0.5s 再取（最多 2 次），仍无则刷新页面让上层重跑流程
+        if chosen is None:
+            for _r in range(2):
+                time.sleep(0.5)
+                chosen, opts = _pick_option()
+                if chosen is not None:
                     break
         if chosen is not None:
             page.select_option(sel, chosen)
@@ -2119,6 +2129,12 @@ def do_op(page, op, account, cdk, emit):
             sample = " | ".join([f"[{o['v']}]{o['t']}" for o in opts[:8]])
             more = f" ...（共 {len(opts)} 个）" if len(opts) > 8 else ""
             emit(f"  ✗ 下拉: 没找到 {val}。可选: {sample}{more}", "warn")
+            # 下拉选项为空/未找到目标：刷新页面，由上层重跑流程（claim 捕获 _ClaimStuck 刷新重跑 / cdk 下轮重开页面）
+            try:
+                page.reload(wait_until="commit")
+            except Exception:
+                pass
+            raise _ClaimStuck(f"{sel} 下拉选项为空/未找到 {val}（已等 0.5s×2 次）")
 
     elif action == "ocr":
         if not ocr:
@@ -3819,7 +3835,8 @@ def stats_cli(args):
             last = json.load(f)
         print("最近一次验证码识别统计：")
         print(f"  时间:     {last.get('time', '')}")
-        print(f"  成功率:   {last.get('rate')}%  （{last.get('ok')}/{last.get('total')}）")
+        print(f"  识别成功率: {last.get('rate')}%  （{last.get('ok')}/{last.get('total')}）")
+        print(f"  真实正确率: {last.get('real_rate')}%  （{last.get('real_ok')}/{last.get('real_total')}，扣验证码错误 {last.get('verr')}）")
         print(f"  全失败:   {last.get('allfail')}   长度异常: {last.get('badlen')}")
         print(f"  方法命中: {json.dumps(last.get('method_hits', {}), ensure_ascii=False)}")
     except FileNotFoundError:
@@ -3833,7 +3850,7 @@ def stats_cli(args):
             for l in lines[-n:]:
                 try:
                     d = json.loads(l)
-                    print(f"  {d.get('time', '')}  成功率 {d.get('rate')}%  ({d.get('ok')}/{d.get('total')})  全失败 {d.get('allfail')}  长度异常 {d.get('badlen')}")
+                    print(f"  {d.get('time', '')}  识别成功率 {d.get('rate')}%  ({d.get('ok')}/{d.get('total')})  真实正确率 {d.get('real_rate')}%  ({d.get('real_ok')}/{d.get('real_total')}, 错{d.get('verr')})")
                 except Exception:
                     pass
     except Exception:
