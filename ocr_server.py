@@ -648,7 +648,7 @@ except ImportError:
 _chars_model = None
 _onnx_session = None  # onnxruntime 推理会话（服务器免装 torch 的轻量路径，优先使用）
 _CHARS_CHARSET = "0123456789ABCDEFGHKLMNOPQRSTUVWXYZ"
-_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.92"))  # 平均置信低于此值→换图重试
+_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.78"))  # 阈值扫描：0.78 最优（73.7% vs 0.92 的 40.4%），v1 基线为泄漏虚高
 # 运行时识别失败样本收集：验证码错误/低置信放弃的图保存到 captcha_fail/，供二次训练
 _FAIL_DIR = os.path.join(_DATA_DIR, "captcha_fail")
 _FAIL_MAX = 2000  # 最多保留的失败样本数
@@ -2194,11 +2194,43 @@ import re as _re2
 _NEXT_DATE_RE_CN = _re2.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
 _NEXT_DATE_RE_ISO = _re2.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})")
 # 错误关键词：任一命中 → 视为失败
-_ERROR_KEYWORDS = ["错误", "失败", "无效", "已使用", "已兑换", "失效", "限兑", "校验码", "captcha", "incorrect", "不存在"]
+# 注意：不带"失败"——裸"失败:"是页面固定文案/半渲染文本，会误报；真失败只信"失败: N 个"正则
+_ERROR_KEYWORDS = ["错误", "无效", "已使用", "已兑换", "失效", "限兑", "校验码", "captcha", "incorrect", "不存在"]
 # 注意：成功关键词里"上限"必须在错误关键词列表中**排除**——因为含"上限"是成功
 # B. "失败: N 个" 这种格式的解析正则
 import re as _re
-_FAIL_COUNT_RE = _re.compile(r"失败[::\s]*([0-9]+)\s*个")
+_FAIL_COUNT_RE = _re.compile(r"失败[::：\s]*([0-9]+)\s*个")
+
+def _collect_job_issues(job_id):
+    """任务结束后扫日志，汇总问题账号（账密错误 / 无角色），写入 job['issues']。
+    供前端任务完成时醒目提示（SSE done 事件携带）。"""
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return
+        log = list(job.get("log", []))
+    issues = []
+    seen = set()
+    cur_user = None
+    for item in log:
+        msg = item.get("msg", "") or ""
+        m = _re.search(r"账号 (\S+) 账密错误", msg)
+        if m and m.group(1) not in seen:
+            issues.append({"user": m.group(1), "issue": "账密错误"})
+            seen.add(m.group(1))
+        m2 = _re.search(r"=== 账号: ([^\s（(]+)", msg)
+        if m2:
+            cur_user = m2.group(1)
+        elif cur_user and ("未获取到角色" in msg or "无角色" in msg):
+            _key = (cur_user, "无角色")
+            if _key not in seen:
+                issues.append({"user": cur_user, "issue": "无角色"})
+                seen.add(_key)
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job:
+            job["issues"] = issues
+
 
 def _check_page_error(page, emit):
     """点击后等 2.5s，扫页面找成功/失败关键词
@@ -2931,7 +2963,7 @@ def _api_claim(ex, acc, region, emit):
         emit("  ⚠ 未指定区，使用默认（serverID 为空）", "warn")
     role = ex.get_role(server_id, user) if server_id else None
     if not role:
-        emit("  ✗ 未获取到角色（角色列表为空）", "error")
+        emit(f"  ✗ 账号在{region or '默认区'}无角色（角色列表为空），请检查区服是否正确", "error")
         return
     emit(f"  ✓ 角色: {role}")
     gift_id = ex.get_gift_id()
@@ -2958,7 +2990,7 @@ def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
         emit("  ⚠ CDK 码为空，跳过该 CDK", "warn")
         return
     if not role:
-        emit("  ⚠ 未获取到角色，跳过 CDK（需先配置区/角色）", "warn")
+        emit(f"  ⚠ 账号在{region or '默认区'}无角色，跳过 CDK，请检查区服是否正确", "warn")
         return
     res, msg = "error", ""
     for i in range(1, max_attempts + 1):
@@ -3161,6 +3193,7 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
             if _jb: _jb["_save"] = False; _jb["_save_reason"] = "验证码错误，请重跑"
         emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_units)} 个账号验证码失败: {[u['account'].get('username','?') for u in remaining_units]}", "warn")
 
+    _collect_job_issues(job_id)
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if job:
@@ -3304,6 +3337,7 @@ def _run_job_impl(job_id, config, emit):
     if errors:
         emit(f"⚠ {len(errors)} 个工作线程异常（其余正常），任务完成", "warn")
 
+    _collect_job_issues(job_id)
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if job:
@@ -3766,6 +3800,7 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
             if job: job["status"] = "error"
         return
 
+    _collect_job_issues(job_id)
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if job:
@@ -4022,6 +4057,7 @@ class Handler(BaseHTTPRequestHandler):
                             "cancelled": _st == "cancelled",
                             "msg": _msg,
                             "updatedConfig": job.get("updatedConfig"),
+                            "issues": job.get("issues"),
                         })
                         try: self.wfile.flush()
                         except: pass

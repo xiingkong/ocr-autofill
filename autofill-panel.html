@@ -1865,6 +1865,19 @@
           $("runTitle").textContent = d.ok ? "✅ 完成" : (d.cancelled ? "⏹ 已取消" : "✗ 失败");
           $("runTitle").style.color = d.ok ? "#2e7d32" : (d.cancelled ? "#e65100" : "#c62828");
           $("runHint").textContent = d.msg || (d.ok ? "全部完成" : "执行失败");
+          // 问题账号汇总：账密错误 / 无角色（后端 _collect_job_issues 提供）
+          if (d.issues && d.issues.length) {
+            const bad = d.issues.filter(i => i.issue === "账密错误").map(i => i.user);
+            const norole = d.issues.filter(i => i.issue === "无角色").map(i => i.user);
+            const parts = [];
+            if (bad.length) parts.push("账密错误：" + bad.join("、"));
+            if (norole.length) parts.push("无角色（请检查区服是否正确）：" + norole.join("、"));
+            if (parts.length) {
+              const warnTxt = "⚠ " + parts.join("；");
+              showMsg("error", warnTxt);
+              $("runHint").innerHTML = '<span style="color:#c62828">' + escapeHtml(warnTxt) + '</span>';
+            }
+          }
           // 任务结束——清空 jobId（再点暂停/取消会提示"没有正在运行的任务"），重置按钮状态
           currentJobId = null;
           $("pauseBtn").textContent = "⏸ 暂停";
