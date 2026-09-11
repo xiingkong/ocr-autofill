@@ -1940,6 +1940,20 @@ def _global_cdk_limited_by_next(acc, region, cdk, emit=None):
     except Exception:
         return False
 
+def _ensure_default_cdks(cdks):
+    """CDK 列表里所有码都为空时，补默认三件套：hmxdy666(日)/hmxdy777(周)/hmxdy888(月)。
+    单个空码项由 _api_redeem_cdk 兜底跳过。"""
+    if not cdks:
+        return cdks
+    if all(not (c.get("code") or c.get("value") or c.get("cdk") or "") for c in cdks):
+        return [
+            {"code": "hmxdy666", "schedule": "daily", "used": False},
+            {"code": "hmxdy777", "schedule": "weekly", "used": False},
+            {"code": "hmxdy888", "schedule": "monthly", "used": False},
+        ]
+    return cdks
+
+
 def cdk_active_today(cdk):
     if cdk.get("used") and cdk.get("schedule") == "once":
         return False
@@ -2461,7 +2475,25 @@ def _normalize_run_targets(config):
 # ==================== 新模式：纯 HTTP 发包执行器（无浏览器） ====================
 # 与旧模式（Playwright 浏览器）平行：复用账号/区/CDK周期/并发调度/入库等全部逻辑，
 # 只把"浏览器点击"换成"直接调目标站 HTTP 接口"。
-# 模式开关：config.execMode = "api"（新模式，默认）/ "browser"（旧模式）。
+# 模式开关：config.execMode = "browser"（旧模式 Playwright，默认）/ "api"（新模式 HTTP 发包）。
+
+_CAPTCHA_LOCK = threading.Lock()
+_last_captcha_ts = 0.0
+_CAPTCHA_MIN_INTERVAL = 1.2  # 每次验证码请求至少间隔 1.2s（多账号并发下防止风控限流）
+
+
+def _throttle_captcha():
+    """验证码请求节流：多账号并发时按全局间隔排队，降低被限流概率"""
+    global _last_captcha_ts
+    while True:
+        with _CAPTCHA_LOCK:
+            now = time.time()
+            wait = _last_captcha_ts + _CAPTCHA_MIN_INTERVAL - now
+            if wait <= 0:
+                _last_captcha_ts = now
+                return
+        time.sleep(min(wait, 0.5))
+
 
 class _ApiExecutor:
     """单个会话的 HTTP 发包执行器（对应目标站接口链）"""
@@ -2489,11 +2521,13 @@ class _ApiExecutor:
         """获取验证码图。接口在并发/风控下可能返回 JSON 而非图片，校验 magic bytes，
         非图片退避重试（最多 3 次），仍失败返回 None（由上层处理）。"""
         for _ in range(3):
-            r = self.s.get(self.base + f"/index/captcha?v={random.random()}", timeout=15)
+            _throttle_captcha()  # 全局节流，防并发限流
+            r = self.s.get(self.base + f"/index/captcha?v={random.random()}",
+                           headers={"Referer": self.base + "/index/cdk"}, timeout=15)
             c = r.content
             if c[:4] == b"\x89PNG" or c[:2] == b"\xff\xd8" or c[:3] == b"GIF" or c[:2] == b"BM":
                 return c
-            time.sleep(0.8)
+            time.sleep(1.5)
         return None
 
     def login(self, account, password, captcha):
@@ -2650,7 +2684,13 @@ def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
     user = acc.get("username", "")
     server_id = ex.get_server_id(region) if region else None
     role = ex.get_role(server_id, user) if server_id else None
-    code = cdk.get("code") or cdk.get("value") or ""
+    code = cdk.get("code") or cdk.get("value") or cdk.get("cdk") or ""
+    if not code:
+        emit("  ⚠ CDK 码为空，跳过该 CDK", "warn")
+        return
+    if not role:
+        emit("  ⚠ 未获取到角色，跳过 CDK（需先配置区/角色）", "warn")
+        return
     res, msg = "error", ""
     for i in range(1, max_attempts + 1):
         text, method = _api_recognize(ex, emit)
@@ -2712,9 +2752,9 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
             for _r in _regs:
                 run_units.append({"account": _acc, "region": _normalize_region(str(_r))})
         else:
-            run_units.append({"account": _acc, "region": None})
+            run_units.append({"account": _acc, "region": "六区"})  # 无区账号默认六区
 
-    active_cdks = [c for c in cdk_list if cdk_active_today(c)]
+    active_cdks = _ensure_default_cdks([c for c in cdk_list if cdk_active_today(c)])
     account_cdks_mode = bool(config.get("accountCdks"))
     if not quiet:
         emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
@@ -2861,8 +2901,8 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
 
 def _run_job_impl(job_id, config, emit):
     """要求4 并发入口：按账号分组并发执行；并发=1 或单账号时走原串行逻辑（_run_job_impl_serial）。
-    模式：execMode = "api"（新模式，默认）/ "browser"（旧模式 Playwright）。"""
-    exec_mode = (config.get("execMode") or "api").lower()
+    模式：execMode = "browser"（旧模式 Playwright，默认）/ "api"（新模式 HTTP 发包）。"""
+    exec_mode = (config.get("execMode") or "browser").lower()
     if exec_mode != "api" and not playwright:
         emit("✗ Playwright 未安装，无法执行", "error")
         JOBS[job_id]["status"] = "error"
@@ -2911,7 +2951,7 @@ def _run_job_impl(job_id, config, emit):
         return
 
     # 并行：一次性 CDK 按线程切分（互斥不重复），每日 CDK 每个线程共享全部
-    active_cdks = [c for c in cdk_list if cdk_active_today(c)]
+    active_cdks = _ensure_default_cdks([c for c in cdk_list if cdk_active_today(c)])
     emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
     if active_cdks:
         for c in active_cdks:
@@ -3071,7 +3111,7 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
             run_units.append({"account": _acc, "region": None})
 
     # 筛选今日活跃 CDK
-    active_cdks = [c for c in cdk_list if cdk_active_today(c)]
+    active_cdks = _ensure_default_cdks([c for c in cdk_list if cdk_active_today(c)])
     # 要求3：账号级 CDK 模式（定时任务/now 用），每账号按自己的日/周/月码生成 CDK
     account_cdks_mode = bool(config.get("accountCdks"))
     if not quiet:

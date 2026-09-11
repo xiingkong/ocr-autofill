@@ -568,11 +568,11 @@
         <button id="save">💾 保存</button>
         <span id="savedHint" class="saved-hint"></span>
         <span class="opts-sep">|</span>
-        <label class="opt-pill" title="新模式：纯HTTP发包，快且稳（无浏览器、无页面卡死），默认使用；旧模式：Playwright浏览器自动化（原方式）。两种模式共用同一套账号/区/CDK/日志逻辑">
+        <label class="opt-pill" title="旧模式（默认）：Playwright浏览器自动化（原方式，稳定）；新模式：纯HTTP发包（快但仍有待完善）。两种模式共用同一套账号/区/CDK/日志逻辑">
           执行模式
           <select id="execModeSel" style="max-width:110px;margin-left:4px;background:var(--card,#fff);color:var(--text,#222);border:1px solid #bbb;border-radius:6px;padding:2px 4px">
+            <option value="browser">旧模式（默认）</option>
             <option value="api">新模式</option>
-            <option value="browser">旧模式</option>
           </select>
         </label>
         <span class="opts-sep">|</span>
@@ -862,7 +862,7 @@
       return {
         domain: "newxiadan.3f8cz.com",
         ocrEndpoint: DEFAULT_OCR,
-        execMode: "api",  // api=新模式（纯HTTP发包，默认）/ browser=旧模式（Playwright）
+        execMode: "browser",  // browser=旧模式（Playwright，默认）/ api=新模式（纯HTTP发包）
         pages: {
           login: {
             label: "登录页",
@@ -931,7 +931,7 @@
 
     // 首次访问（本浏览器无缓存）时从后端拉一份配置当模板；之后各浏览器只读自己的 localStorage
     function syncExecModeSel() {
-      if ($("execModeSel") && currentConfig) $("execModeSel").value = (currentConfig.execMode === "browser") ? "browser" : "api";
+      if ($("execModeSel") && currentConfig) $("execModeSel").value = (currentConfig.execMode === "api") ? "api" : "browser";
     }
     async function loadConfigFromServer() {
       try {
@@ -971,7 +971,7 @@
       }
       if (!Array.isArray(c.accounts)) c.accounts = [];
       if (!Array.isArray(c.cdkList)) c.cdkList = [];
-      if (c.execMode !== "api" && c.execMode !== "browser") c.execMode = "api";
+      if (c.execMode !== "api" && c.execMode !== "browser") c.execMode = "browser";
       return c;
     }
 
@@ -1816,7 +1816,7 @@
       }
       if (runTargets.length === 0) { showMsg("error", "请至少勾选一个执行目标（登录页、领取页 或 CDK 页）"); return; }
       cfg.runTargets = runTargets;
-      cfg.execMode = $("execModeSel") ? $("execModeSel").value : (cfg.execMode || "api");
+      cfg.execMode = $("execModeSel") ? $("execModeSel").value : (cfg.execMode || "browser");
       if (currentEs) { showMsg("error", "已有任务在跑，请先关闭"); return; }
 
       // 显示进度面板
