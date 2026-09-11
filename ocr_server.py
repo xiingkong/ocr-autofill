@@ -646,6 +646,7 @@ except ImportError:
 # ---------- 自定义字符 CNN（34 类：0-9A-Z 去 I/J，训练自 994 张 AI 真值） ----------
 # 优先于 ddddocr 使用；加载失败自动回退 ddddocr
 _chars_model = None
+_onnx_session = None  # onnxruntime 推理会话（服务器免装 torch 的轻量路径，优先使用）
 _CHARS_CHARSET = "0123456789ABCDEFGHKLMNOPQRSTUVWXYZ"
 _CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.92"))  # 平均置信低于此值→换图重试
 # 运行时识别失败样本收集：验证码错误/低置信放弃的图保存到 captcha_fail/，供二次训练
@@ -655,7 +656,25 @@ _FAIL_COUNT = 0
 _FAIL_LOCK = threading.Lock()
 
 def _load_chars_cnn():
-    global _chars_model
+    global _chars_model, _onnx_session
+    # ① 优先 onnxruntime：轻量（pip install onnxruntime 即可，服务器免装 torch）
+    _found_onnx = False
+    for _d in (APP_DIR, _DATA_DIR):
+        _op = os.path.join(_d, "chars_cnn_34.onnx")
+        if os.path.exists(_op):
+            _found_onnx = True
+            try:
+                import onnxruntime as ort
+                _onnx_session = ort.InferenceSession(_op, providers=["CPUExecutionProvider"])
+                print("[OK] 字符 CNN 已加载（ONNX 34 类，阈值 %s）: %s" % (_CNN_MIN_CONF, _op))
+                return True
+            except Exception as e:
+                print("[WARN] 已找到 chars_cnn_34.onnx 但加载失败（服务器需 pip install onnxruntime）: %s" % e)
+                _onnx_session = None
+            break
+    if not _found_onnx:
+        print("[WARN] 未找到 chars_cnn_34.onnx（需随代码推送模型文件），尝试 torch 兜底")
+    # ② 兜底 torch（.pt 权重）
     try:
         import torch
         sys.path.insert(0, APP_DIR)
@@ -672,12 +691,12 @@ def _load_chars_cnn():
         if not os.path.exists(_mp):
             _mp = os.path.join(_DATA_DIR, "chars_cnn_34.pt")
         if not os.path.exists(_mp):
-            print("[WARN] 未找到字符 CNN 模型 chars_cnn_34.pt，回退 ddddocr")
+            print("[WARN] 未找到字符 CNN 模型（chars_cnn_34.onnx / chars_cnn_34.pt），回退 ddddocr")
             return False
         m.load_state_dict(torch.load(_mp, map_location="cpu"))
         m.eval()
         _chars_model = m
-        print("[OK] 字符 CNN 已加载（34 类，阈值 %s）: %s" % (_CNN_MIN_CONF, _mp))
+        print("[OK] 字符 CNN 已加载（torch 34 类，阈值 %s）: %s" % (_CNN_MIN_CONF, _mp))
         return True
     except Exception as e:
         print("[WARN] 字符 CNN 加载失败，回退 ddddocr: %s" % e)
@@ -735,7 +754,7 @@ def _predict_cnn_text(img_bytes, min_conf=None):
     """整图 → 等宽切字 → 逐字符 CNN 预测 → 文本。
     试 5/4 位两种切分，取平均置信度高者；低于 min_conf 返回 (None, conf)。"""
     global _chars_model
-    if _chars_model is None:
+    if _chars_model is None and _onnx_session is None:
         return None, 0.0
     min_conf = _CNN_MIN_CONF if min_conf is None else min_conf
     try:
@@ -752,14 +771,24 @@ def _predict_cnn_text(img_bytes, min_conf=None):
         if not chars or len(chars) != n:
             continue
         text, csum, bad = [], 0.0, False
-        with torch.no_grad():
-            for ch in chars:
-                cn = _cnn_norm_char(ch)
-                if cn is None:
-                    bad = True
-                    break
-                x = torch.tensor(np.array(cn, dtype=np.float32) / 255.0).unsqueeze(0).unsqueeze(0)
-                out = _chars_model(x)
+        for ch in chars:
+            cn = _cnn_norm_char(ch)
+            if cn is None:
+                bad = True
+                break
+            xnp = np.array(cn, dtype=np.float32) / 255.0
+            if _onnx_session is not None:
+                out = _onnx_session.run(None, {"x": xnp.reshape(1, 1, 28, 28)})[0][0]
+                out = out - out.max()
+                e = np.exp(out)
+                p = e / e.sum()
+                idx = int(p.argmax())
+                csum += float(p[idx])
+                text.append(_CHARS_CHARSET[idx])
+            else:
+                x = torch.tensor(xnp).unsqueeze(0).unsqueeze(0)
+                with torch.no_grad():
+                    out = _chars_model(x)
                 p = torch.softmax(out, dim=1)[0]
                 idx = int(p.argmax())
                 csum += float(p[idx])
@@ -1103,7 +1132,7 @@ def do_ocr_once(img_bytes, emit=None):
     """单次 OCR 识别：字符 CNN 优先；CNN 低置信/无输出返回 None（由调用方换图重试）。
     ddddocr 仅作 CNN 加载失败时的兜底（老模型正确率≈0，CNN 可用时绝不落它）。
     带 try/except 保护；全局锁串行化，防并发异常。"""
-    if _chars_model is not None:
+    if _chars_model is not None or _onnx_session is not None:
         return _predict_cnn_text(img_bytes)[0]
     try:
         b64 = base64.b64encode(img_bytes).decode()
@@ -4549,7 +4578,8 @@ def config_cli(args):
     # OCR 模型
     beta = os.environ.get("OCR_BETA", "0") != "0"
     print(f"OCR 模型:  {'新模型 common.onnx（beta=True）' if beta else '老模型 common_old.onnx（beta=False）'}")
-    print(f"字符 CNN:   {'已加载（34 类，阈值 %s）' % _CNN_MIN_CONF if _chars_model is not None else '未加载（回退 ddddocr）'}")
+    _engine = "onnxruntime" if _onnx_session is not None else ("torch" if _chars_model is not None else None)
+    print(f"字符 CNN:   {'已加载（34 类，阈值 %s，引擎 %s）' % (_CNN_MIN_CONF, _engine) if _engine else '未加载（回退 ddddocr）'}")
     print(f"失败样本:   {_FAIL_DIR}（运行中自动收集，供二次训练）")
     # 字符集
     _r = (os.environ.get("OCR_RANGES", "") or "").strip()
