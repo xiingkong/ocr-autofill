@@ -2673,6 +2673,7 @@ def _api_login_with_retry(ex, acc, emit, max_attempts=5):
             return False, "wrong_pwd"
         if res == "captcha_error":
             emit(f"  ⚠ 验证码错误（第 {i} 次），换图重试", "warn")
+            _stats_bump("verr")  # 真实正确率：提交被服务器判错
             continue
         emit(f"  ✗ 登录接口异常: {msg}", "error")
         return False, "error"
@@ -2731,6 +2732,7 @@ def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
         res, msg = ex.redeem_cdk(server_id, user, role, code, text)
         if res == "captcha_error":
             emit(f"  ⚠ CDK 验证码错误（第 {i} 次），换图重试", "warn")
+            _stats_bump("verr")  # 真实正确率：提交被服务器判错
             continue
         break
     if res == "error" and not msg:
