@@ -2486,8 +2486,15 @@ class _ApiExecutor:
 
     # ---- 接口 ----
     def fetch_captcha(self):
-        r = self.s.get(self.base + f"/index/captcha?v={random.random()}", timeout=15)
-        return r.content
+        """获取验证码图。接口在并发/风控下可能返回 JSON 而非图片，校验 magic bytes，
+        非图片退避重试（最多 3 次），仍失败返回 None（由上层处理）。"""
+        for _ in range(3):
+            r = self.s.get(self.base + f"/index/captcha?v={random.random()}", timeout=15)
+            c = r.content
+            if c[:4] == b"\x89PNG" or c[:2] == b"\xff\xd8" or c[:3] == b"GIF" or c[:2] == b"BM":
+                return c
+            time.sleep(0.8)
+        return None
 
     def login(self, account, password, captcha):
         r = self.s.post(self.base + "/api/player/login",
@@ -2546,13 +2553,13 @@ class _ApiExecutor:
 
     def _parse_result(self, r):
         """统一解析接口返回 → (result, msg)
-        result: ok / captcha_error / wrong_pwd / limit / fail / error"""
+        result: ok / captcha_error / wrong_pwd / limit / fail / error
+        注意：state=true 不代表业务成功（CDK 接口常返回 {"state":true,"data":"验证码错误！"}），
+        data 里的错误关键词优先判断。"""
         try:
             j = r.json()
         except Exception:
             return ("error", r.text[:120])
-        if j.get("state"):
-            return ("ok", str(j.get("data") or ""))
         msg = str(j.get("data") or "")
         if any(k in msg for k in CAPTCHA_RETRY_KEYWORDS):
             return ("captcha_error", msg)
@@ -2560,6 +2567,8 @@ class _ApiExecutor:
             return ("wrong_pwd", msg)
         if any(k in msg for k in ("上限", "次数已达", "请勿重复", "已领取", "已兑换")):
             return ("limit", msg)
+        if j.get("state"):
+            return ("ok", msg)
         return ("fail", msg)
 
 
@@ -2567,6 +2576,9 @@ def _api_recognize(ex, emit):
     """取验证码图 + 识别 → (text, method)；失败返回 (None, None)"""
     try:
         img = ex.fetch_captcha()
+        if not img:
+            emit("  ⚠ 验证码图获取失败（接口未返回图片，可能被限流）", "warn")
+            return None, None
     except Exception as e:
         emit(f"  ⚠ 获取验证码失败: {e}", "warn")
         return None, None
