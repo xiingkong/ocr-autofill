@@ -692,6 +692,21 @@ MAX_JOBS_KEPT = 20          # JOBS 内存只保留最近 20 条完成记录，�
 _ACCOUNT_RUNNING = {}       # username -> job_id（该账号正在被哪个任务操作）
 _ACCOUNT_RUNNING_LOCK = threading.Lock()
 
+
+def _cleanup_stale_account_locks():
+    """清理残留锁：持有者任务已结束（done/error/cancelled）或已不存在 → 删除。
+    防止任务异常退出（Ctrl+C/杀进程/重启）或记录被清理后锁残留，导致账号被误判占用。"""
+    with _ACCOUNT_RUNNING_LOCK:
+        for _u in list(_ACCOUNT_RUNNING):
+            _jid = _ACCOUNT_RUNNING.get(_u)
+            if not _jid:
+                del _ACCOUNT_RUNNING[_u]
+                continue
+            _st = (JOBS.get(_jid) or {}).get("status")
+            # 任务不存在（已被 _cleanup_old_jobs 清掉）或已结束 → 残留，删除
+            if not _st or _st != "running":
+                del _ACCOUNT_RUNNING[_u]
+
 def _num_to_cn(n):
     """阿拉伯数字转中文数字（1→一，10→十，12→十二，101→一百零一）；超范围原样返回"""
     _d = "零一二三四五六七八九"
@@ -833,6 +848,7 @@ def preprocess_denoise(img_bytes, scale=2):
 # 验证码识别统计：共享计数（任务内所有 worker 线程合计；任务开始 _reset_ocr_stats，结束 _finalize_ocr_stats）
 _ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "verr": 0, "method_hits": {}}
 _ocr_stats_lock = threading.Lock()
+_ocr_run_lock = threading.Lock()   # ddddocr 实例多线程并发保护（部分平台 onnxruntime 并发异常）
 
 def _reset_ocr_stats():
     global _ocr_stats
@@ -930,10 +946,11 @@ def is_valid_captcha_text(text):
     return all(c.isalnum() for c in text)
 
 def do_ocr_once(img_bytes, emit=None):
-    """单次 OCR 识别（带 try/except 保护）"""
+    """单次 OCR 识别（带 try/except 保护；全局锁串行化，防并发异常）"""
     try:
         b64 = base64.b64encode(img_bytes).decode()
-        text = ocr.classification(b64).strip()
+        with _ocr_run_lock:
+            text = ocr.classification(b64).strip()
         return text
     except Exception as e:
         if emit:
@@ -2330,12 +2347,25 @@ def run_job(job_id, config):
         try:
             _run_job_impl(job_id, config, emit)
             _finalize_ocr_stats(emit)
+        except _JobCancelled:
+            _finalize_ocr_stats(emit)
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+                if job: job["status"] = "cancelled"
         except Exception as e:
             import traceback
             _finalize_ocr_stats(emit)
             emit(f"✗ 异常: {e}", "error")
             emit(traceback.format_exc(), "error")
-            JOBS[job_id]["status"] = "error"
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
+                if job: job["status"] = "error"
+        finally:
+            # 兜底清除本任务标记的账号（任何退出路径都不残留：取消/异常/正常）
+            with _ACCOUNT_RUNNING_LOCK:
+                for _u in list(_ACCOUNT_RUNNING):
+                    if _ACCOUNT_RUNNING[_u] == job_id:
+                        del _ACCOUNT_RUNNING[_u]
         _cleanup_old_jobs()
 
     threading.Thread(target=th, daemon=True).start()
@@ -2703,6 +2733,8 @@ def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
             emit(f"  ⚠ CDK 验证码错误（第 {i} 次），换图重试", "warn")
             continue
         break
+    if res == "error" and not msg:
+        msg = f"验证码 {max_attempts} 次未成功"
     if res == "ok":
         emit(f"  ✓ CDK 成功: {msg[:60]}")
         # 要求3：周/月码记录下次周期（成功：last=今天，从 +7/+30 起算）
@@ -2788,6 +2820,7 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
             region = unit["region"]
             acc_user = acc.get("username", "?")
             # 账号级防重：同一账号正在被其他任务操作 → 本轮跳过
+            _cleanup_stale_account_locks()
             with _ACCOUNT_RUNNING_LOCK:
                 _holder = _ACCOUNT_RUNNING.get(acc_user)
                 if _holder and _holder != job_id:
@@ -2816,6 +2849,9 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
                 ok, err = _api_login_with_retry(ex, acc, emit)
                 if err == "wrong_pwd":
                     last_result = "wrong_pwd"
+                    with JOBS_LOCK:
+                        _jb = JOBS.get(job_id)
+                        if _jb: _jb["_save"] = False; _jb["_save_reason"] = "账密错误"
                     emit(f"  ✗ 账号 {acc_user} 账密错误，标记但不进下一轮、不入库", "error")
                 elif not ok:
                     last_result = "failure"
@@ -2858,12 +2894,16 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
                             if _regs:
                                 db_add_account_regions(_u, _regs)
                             emit(f"  ✓ 账号 {_u} 执行成功，已自动入库（下次执行直接走数据库配置）", "success")
+                            with JOBS_LOCK:
+                                _jb = JOBS.get(job_id)
+                                if _jb: _jb["_save"] = True; _jb["_save_reason"] = "已入库"
                         except Exception as _e:
                             emit(f"  ⚠ 账号 {_u} 入库失败: {_e}", "warn")
 
         # 本轮收尾
         if not next_remaining:
-            emit("\n✅ 所有账号验证码都已通过")
+            if not quiet:
+                emit("\n✅ 所有账号验证码都已通过")
             remaining_units = []
         else:
             remaining_units = next_remaining
@@ -2874,6 +2914,9 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
                     del _ACCOUNT_RUNNING[_u]
 
     if remaining_units:
+        with JOBS_LOCK:
+            _jb = JOBS.get(job_id)
+            if _jb: _jb["_save"] = False; _jb["_save_reason"] = "验证码错误，请重跑"
         emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_units)} 个账号验证码失败: {[u['account'].get('username','?') for u in remaining_units]}", "warn")
 
     with JOBS_LOCK:
@@ -2881,7 +2924,8 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
         if job:
             job["status"] = "done"
             job["result"] = "completed"
-    emit("\n✅ 全部完成")
+    if not quiet:
+        emit("\n✅ 全部完成")
     # 持久化一次性 CDK 状态
     try:
         n_marked = 0
@@ -3402,6 +3446,9 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         last = captcha_ctx.get("last_result")
                         if last == "wrong_pwd":
                             acc_user = acc.get("username", "?")
+                            with JOBS_LOCK:
+                                _jb = JOBS.get(job_id)
+                                if _jb: _jb["_save"] = False; _jb["_save_reason"] = "账密错误"
                             emit(f"  ✗ 账号 {acc_user} 账密错误，标记但不进下一轮、不入库", "error")
                             # 账密错：不入 next_remaining，账密也不入库（用户要求）
                         elif last == "failure":
@@ -3425,11 +3472,15 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                                         if _regs:
                                             db_add_account_regions(_u, _regs)
                                         emit(f"  ✓ 账号 {_u} 执行成功，已自动入库（下次执行直接走数据库配置）", "success")
+                                        with JOBS_LOCK:
+                                            _jb = JOBS.get(job_id)
+                                            if _jb: _jb["_save"] = True; _jb["_save_reason"] = "已入库"
                                     except Exception as _e:
                                         emit(f"  ⚠ 账号 {_u} 入库失败: {_e}", "warn")
                     # 本轮结束：更新 remaining + round
                     if not next_remaining:
-                        emit("\n✅ 所有账号验证码都已通过")
+                        if not quiet:
+                            emit("\n✅ 所有账号验证码都已通过")
                         remaining_units = []
                     else:
                         remaining_units = next_remaining
@@ -3440,6 +3491,9 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                             if _ACCOUNT_RUNNING[_u] == job_id:
                                 del _ACCOUNT_RUNNING[_u]
                 if remaining_units:
+                    with JOBS_LOCK:
+                        _jb = JOBS.get(job_id)
+                        if _jb: _jb["_save"] = False; _jb["_save_reason"] = "验证码错误，请重跑"
                     emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_units)} 个账号验证码失败: {[u['account'].get('username','?') for u in remaining_units]}", "warn")
             finally:
                 try: browser.close()
@@ -3941,21 +3995,28 @@ class Handler(BaseHTTPRequestHandler):
                             with job["cond"]:
                                 job["cond"].notify_all()
                         _run_job_impl(jid, cfg, _emit)
-                        # 跑完后判断结果（入库由 serial 统一做，这里只做状态分类）
+                        # 跑完后判断结果（优先读 serial 写入的确定性 _save 标记，避免日志猜测误报）
                         with JOBS_LOCK:
                             job = JOBS.get(jid)
+                            _mark = job.get("_save") if job else None
+                            _reason = job.get("_save_reason") if job else None
                             log = job.get("log", []) if job else []
-                        wrong_pwd = any("账密错误" in item.get("msg", "") for item in log)
-                        captcha_fail = any(("仍有" in item.get("msg", "") and "验证码失败" in item.get("msg", "")) for item in log)
-                        if wrong_pwd:
+                        if _mark is not None:
                             with JOBS_LOCK:
-                                if job: job["saved"] = False; job["save_reason"] = "账密错误"
-                        elif captcha_fail:
-                            with JOBS_LOCK:
-                                if job: job["saved"] = False; job["save_reason"] = "验证码错误，请重跑"
+                                if job: job["saved"] = bool(_mark); job["save_reason"] = _reason or ("已入库" if _mark else "未入库")
                         else:
-                            with JOBS_LOCK:
-                                if job: job["saved"] = True; job["save_reason"] = "已入库"
+                            # 兜底：无标记时按日志判断
+                            wrong_pwd = any("账密错误" in item.get("msg", "") for item in log)
+                            captcha_fail = any(("仍有" in item.get("msg", "") and "验证码失败" in item.get("msg", "")) for item in log)
+                            if wrong_pwd:
+                                with JOBS_LOCK:
+                                    if job: job["saved"] = False; job["save_reason"] = "账密错误"
+                            elif captcha_fail:
+                                with JOBS_LOCK:
+                                    if job: job["saved"] = False; job["save_reason"] = "验证码错误，请重跑"
+                            else:
+                                with JOBS_LOCK:
+                                    if job: job["saved"] = True; job["save_reason"] = "已入库"
                     except Exception as e:
                         import traceback
                         print(f"[test-redeem] 异常: {e}", flush=True)
