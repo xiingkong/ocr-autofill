@@ -73,6 +73,7 @@
       max-width: 46vw; white-space: nowrap; overflow: hidden;
     }
     .header-domain code { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+    .header-domain .dom-label { font-style: normal; }
 
     /* ---------- 布局容器 ---------- */
     .page { max-width: 1060px; margin: 0 auto; padding: 18px 16px 96px; }
@@ -320,8 +321,15 @@
       .app-header { padding: 10px 12px; }
       .brand-logo { width: 36px; height: 36px; font-size: 18px; border-radius: 10px; }
       h1 { font-size: 17px; }
-      .header-domain { max-width: 44vw; font-size: 11px; padding: 5px 10px; }
+      .header-domain { max-width: 58vw; font-size: 11px; padding: 5px 10px; }
+      .header-domain .dom-label { display: none; }  /* 手机端隐藏"当前域名："前缀，域名完整显示 */
       .grid { grid-template-columns: 1fr; }
+      /* 执行目标/执行模式/读数据库配置：手机端全部换行，标签独占一行，pill 不被压缩截断 */
+      .run-opts { gap: 8px 10px; }
+      .run-opts .opts-label { width: 100%; }
+      .run-opts .opts-sep { display: none; }
+      .run-opts .opt-pill { flex: 0 0 auto; white-space: nowrap; }
+      #execModeSel { max-width: 150px !important; }
       .region-row { flex-direction: column; align-items: stretch; }
       .region-field { flex: 1 1 auto; min-width: 0; }
       .run-all-btn { width: 100%; }
@@ -526,7 +534,7 @@
       </div>
     </div>
     <div class="header-right">
-      <span class="header-domain">🌐 当前域名：<code id="currentDomain">未设置</code></span>
+      <span class="header-domain">🌐 <i class="dom-label">当前域名：</i><code id="currentDomain">未设置</code></span>
       <button id="themeBtn" class="theme-btn" onclick="toggleTheme()" title="切换深浅色">🌙</button>
     </div>
   </header>
