@@ -20,9 +20,11 @@ import base64
 import uuid
 import threading
 import queue
+import random  # 新模式验证码 URL 随机参数
 import socket
 import sqlite3
 import copy
+import requests  # 新模式（纯 HTTP 发包）用
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2456,9 +2458,400 @@ def _normalize_run_targets(config):
     return run_targets, config
 
 
+# ==================== 新模式：纯 HTTP 发包执行器（无浏览器） ====================
+# 与旧模式（Playwright 浏览器）平行：复用账号/区/CDK周期/并发调度/入库等全部逻辑，
+# 只把"浏览器点击"换成"直接调目标站 HTTP 接口"。
+# 模式开关：config.execMode = "api"（新模式，默认）/ "browser"（旧模式）。
+
+class _ApiExecutor:
+    """单个会话的 HTTP 发包执行器（对应目标站接口链）"""
+
+    def __init__(self, domain, emit=None):
+        self.domain = domain
+        self.base = "https://" + domain
+        self.emit = emit
+        self.s = requests.Session()
+        self.s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": self.base,
+        })
+        self._init_session()
+
+    def _init_session(self):
+        # GET 登录页拿初始 _csrf cookie
+        r = self.s.get(self.base + "/player/login", timeout=15)
+        r.raise_for_status()
+
+    # ---- 接口 ----
+    def fetch_captcha(self):
+        r = self.s.get(self.base + f"/index/captcha?v={random.random()}", timeout=15)
+        return r.content
+
+    def login(self, account, password, captcha):
+        r = self.s.post(self.base + "/api/player/login",
+                        files={"account": (None, account), "password": (None, password), "captcha": (None, captcha)},
+                        timeout=15)
+        return self._parse_result(r)
+
+    def get_server_id(self, region):
+        """汉字区名（如"六区"）→ serverID（如"6"）；无区返回 None"""
+        if not region:
+            return None
+        r = self.s.get(self.base + "/api/game/server-list", timeout=15)
+        j = r.json()
+        for sv in (j.get("data") or []):
+            if str(sv.get("name")) == region:
+                return str(sv.get("server"))
+        return None
+
+    def get_role(self, server_id, account):
+        if not server_id:
+            return None
+        r = self.s.post(self.base + "/api/game/role-list",
+                        files={"serverID": (None, server_id), "account": (None, account)}, timeout=15)
+        j = r.json()
+        data = j.get("data") or {}
+        roles = list(data.values()) if isinstance(data, dict) else (data or [])
+        if not roles:
+            return None
+        first = roles[0]
+        if isinstance(first, dict):
+            return str(first.get("roleID") or first.get("name") or "")
+        return str(first)
+
+    def get_gift_id(self):
+        """0 元购礼包的 giftID（recharge-list 里 isGift=true 且 money=0 的那条）"""
+        r = self.s.get(self.base + "/api/player/recharge-list", timeout=15)
+        j = r.json()
+        for g in (j.get("data") or []):
+            money = str(g.get("money") or "0").strip()
+            if g.get("isGift") and money in ("0", "0.00", "0.0", ""):
+                return str(g.get("id"))
+        return None
+
+    def claim(self, server_id, account, role, gift_id):
+        r = self.s.post(self.base + "/api/player/gift-claim",
+                        files={"serverID": (None, server_id), "account": (None, account),
+                               "role": (None, role), "giftID": (None, gift_id)}, timeout=15)
+        return self._parse_result(r)
+
+    def redeem_cdk(self, server_id, account, role, cdk_code, captcha):
+        r = self.s.post(self.base + "/api/game/cdk",
+                        files={"serverID": (None, server_id), "account": (None, account),
+                               "role": (None, role), "cdk": (None, cdk_code), "captcha": (None, captcha)},
+                        timeout=15)
+        return self._parse_result(r)
+
+    def _parse_result(self, r):
+        """统一解析接口返回 → (result, msg)
+        result: ok / captcha_error / wrong_pwd / limit / fail / error"""
+        try:
+            j = r.json()
+        except Exception:
+            return ("error", r.text[:120])
+        if j.get("state"):
+            return ("ok", str(j.get("data") or ""))
+        msg = str(j.get("data") or "")
+        if any(k in msg for k in CAPTCHA_RETRY_KEYWORDS):
+            return ("captcha_error", msg)
+        if any(k in msg for k in WRONG_PWD_KEYWORDS):
+            return ("wrong_pwd", msg)
+        if any(k in msg for k in ("上限", "次数已达", "请勿重复", "已领取", "已兑换")):
+            return ("limit", msg)
+        return ("fail", msg)
+
+
+def _api_recognize(ex, emit):
+    """取验证码图 + 识别 → (text, method)；失败返回 (None, None)"""
+    try:
+        img = ex.fetch_captcha()
+    except Exception as e:
+        emit(f"  ⚠ 获取验证码失败: {e}", "warn")
+        return None, None
+    try:
+        text, method = ocr_with_variants(img, emit)
+    except Exception as e:
+        emit(f"  [OCR] 识别异常: {e}", "warn")
+        return None, None
+    return text, method
+
+
+def _api_login_with_retry(ex, acc, emit, max_attempts=5):
+    """登录：验证码失败自动换图重试。返回 (ok, err_type)
+    err_type: None(成功) / wrong_pwd / failure(验证码用尽) / error(接口异常)"""
+    user = acc.get("username", "")
+    pwd = acc.get("password", "")
+    for i in range(1, max_attempts + 1):
+        text, method = _api_recognize(ex, emit)
+        if not text or not is_valid_captcha_text(text):
+            emit(f"  ⚠ 验证码识别无效（第 {i} 次），换图重试", "warn")
+            continue
+        emit(f"  ✓ OCR 识别 ({method or '原图'}): {text}")
+        res, msg = ex.login(user, pwd, text)
+        if res == "ok":
+            emit("  ✓ 登录成功")
+            return True, None
+        if res == "wrong_pwd":
+            return False, "wrong_pwd"
+        if res == "captcha_error":
+            emit(f"  ⚠ 验证码错误（第 {i} 次），换图重试", "warn")
+            continue
+        emit(f"  ✗ 登录接口异常: {msg}", "error")
+        return False, "error"
+    return False, "failure"
+
+
+def _api_claim(ex, acc, region, emit):
+    """领取 0 元礼包：区→角色→礼包→提交"""
+    user = acc.get("username", "")
+    server_id = ex.get_server_id(region) if region else None
+    if region and not server_id:
+        emit(f"  ✗ 区列表未找到「{region}」", "error")
+        return
+    if server_id:
+        emit(f"  ✓ 区「{region}」→ serverID={server_id}")
+    else:
+        emit("  ⚠ 未指定区，使用默认（serverID 为空）", "warn")
+    role = ex.get_role(server_id, user) if server_id else None
+    if not role:
+        emit("  ✗ 未获取到角色（角色列表为空）", "error")
+        return
+    emit(f"  ✓ 角色: {role}")
+    gift_id = ex.get_gift_id()
+    if not gift_id:
+        emit("  ✗ 未获取到 0 元礼包", "error")
+        return
+    emit(f"  ✓ 礼包ID: {gift_id}")
+    res, msg = ex.claim(server_id, user, role, gift_id)
+    if res == "ok":
+        emit(f"  ✓ 领取成功: {msg[:60] or '0元购'}")
+    elif res == "limit":
+        emit(f"  ✓ 已领取过: {msg[:60]}", "warn")
+    else:
+        emit(f"  ✗ 领取失败: {msg}", "error")
+
+
+def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
+    """CDK 兑换：验证码失败自动换图重试；成功/上限自动记录周月周期"""
+    user = acc.get("username", "")
+    server_id = ex.get_server_id(region) if region else None
+    role = ex.get_role(server_id, user) if server_id else None
+    code = cdk.get("code") or cdk.get("value") or ""
+    res, msg = "error", ""
+    for i in range(1, max_attempts + 1):
+        text, method = _api_recognize(ex, emit)
+        if not text or not is_valid_captcha_text(text):
+            emit(f"  ⚠ CDK 验证码识别无效（第 {i} 次），换图重试", "warn")
+            continue
+        emit(f"  ✓ OCR 识别 ({method or '原图'}): {text}")
+        res, msg = ex.redeem_cdk(server_id, user, role, code, text)
+        if res == "captcha_error":
+            emit(f"  ⚠ CDK 验证码错误（第 {i} 次），换图重试", "warn")
+            continue
+        break
+    if res == "ok":
+        emit(f"  ✓ CDK 成功: {msg[:60]}")
+        # 要求3：周/月码记录下次周期（成功：last=今天，从 +7/+30 起算）
+        if cdk.get("account_cdk") and cdk.get("schedule") in ("weekly", "monthly"):
+            try:
+                _last = db_update_cdk_cycle_last(user, region or "", cdk["schedule"])
+                emit(f"  ✓ {cdk['schedule']}CDK 成功，下次周期从 {_last} 起算")
+            except Exception as _e:
+                emit(f"  ⚠ 记录 {cdk['schedule']}CDK 周期失败: {_e}", "warn")
+    elif res == "limit":
+        emit(f"  ✓ CDK 达上限: {msg[:60]}")
+        # 上限：尝试提取服务器返回的下次刷新时间
+        if cdk.get("account_cdk") and cdk.get("schedule") in ("weekly", "monthly"):
+            try:
+                _nx = _extract_next_date(msg)
+                if _nx:
+                    db_set_cdk_cycle_next(user, region or "", cdk["schedule"], _nx)
+                    emit(f"  ✓ {cdk['schedule']}CDK 达上限，下次 {_nx} 再跑（已自动设置）")
+                else:
+                    _last = db_update_cdk_cycle_last(user, region or "", cdk["schedule"])
+                    emit(f"  ✓ {cdk['schedule']}CDK 达上限（未识别到日期），下次周期从 {_last} 起算")
+            except Exception as _e:
+                emit(f"  ⚠ 记录 {cdk['schedule']}CDK 周期失败: {_e}", "warn")
+    else:
+        emit(f"  ✗ CDK 失败: {msg}", "error")
+    # 一次性 CDK 标已用
+    if cdk.get("schedule") == "once":
+        cdk["used"] = True
+        emit(f"  ✓ CDK[{code[:10]}] 已标记为已用")
+
+
+def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
+    """新模式（纯 HTTP 发包）串行执行：与 _run_job_impl_serial 逻辑平行。
+    展开账号×区 → 登录 → 领取 → CDK → 多轮验证码重试 → 入库。"""
+    accounts = config.get("accounts", [])
+    cdk_list = config.get("cdkList", [])
+    domain = config.get("domain", "")
+
+    # 展开 账号×区（与旧模式一致）
+    run_units = []
+    for _acc in accounts:
+        _regs = _acc.get("regions")
+        if not isinstance(_regs, list) or not _regs:
+            _r0 = _acc.get("region")
+            _regs = [_r0] if _r0 else []
+        if _regs:
+            for _r in _regs:
+                run_units.append({"account": _acc, "region": _normalize_region(str(_r))})
+        else:
+            run_units.append({"account": _acc, "region": None})
+
+    active_cdks = [c for c in cdk_list if cdk_active_today(c)]
+    account_cdks_mode = bool(config.get("accountCdks"))
+    if not quiet:
+        emit(f"📋 今日活跃 CDK: {len(active_cdks)} 个（总计 {len(cdk_list)}）")
+        if active_cdks:
+            for c in active_cdks:
+                emit(f"  - [{c.get('schedule')}] {c.get('code', '')[:20]}...")
+
+    if not accounts:
+        emit("✗ 没有账号", "error")
+        JOBS[job_id]["status"] = "error"
+        return
+
+    if not quiet:
+        emit("🚀 新模式（纯 HTTP 发包，无浏览器）")
+
+    run_targets, _ = _normalize_run_targets(config)
+    if not quiet:
+        emit(f"🎯 执行目标: {', '.join(run_targets)}")
+
+    MAX_CAPTCHA_ROUNDS = 5
+    round_num = 1
+    remaining_units = list(run_units)
+
+    while remaining_units and round_num <= MAX_CAPTCHA_ROUNDS:
+        if round_num > 1:
+            emit(f"\n===== 第 {round_num} 轮：重试 {len(remaining_units)} 个验证码失败的单元 =====")
+        next_remaining = []
+
+        for unit in remaining_units:
+            acc = unit["account"]
+            region = unit["region"]
+            acc_user = acc.get("username", "?")
+            # 账号级防重：同一账号正在被其他任务操作 → 本轮跳过
+            with _ACCOUNT_RUNNING_LOCK:
+                _holder = _ACCOUNT_RUNNING.get(acc_user)
+                if _holder and _holder != job_id:
+                    emit(f"  ⚠ 账号 {acc_user} 正在被其他任务（{_holder[:8]}）操作，本轮跳过", "warn")
+                    continue
+                _ACCOUNT_RUNNING[acc_user] = job_id
+            _check_pause(job_id, emit)
+            _check_cancel(job_id, emit)
+            if region:
+                emit(f"\n=== 账号: {acc_user}（区: {region}）===")
+            else:
+                emit(f"\n=== 账号: {acc_user} ===")
+
+            # 初始化 HTTP 会话（每单元独立，cookie 干净）
+            try:
+                ex = _ApiExecutor(domain, emit)
+            except Exception as e:
+                emit(f"  ✗ 初始化会话失败: {e}", "error")
+                next_remaining.append(unit)
+                continue
+
+            last_result = "success"
+
+            # ---- 登录 ----
+            if "login" in run_targets:
+                ok, err = _api_login_with_retry(ex, acc, emit)
+                if err == "wrong_pwd":
+                    last_result = "wrong_pwd"
+                    emit(f"  ✗ 账号 {acc_user} 账密错误，标记但不进下一轮、不入库", "error")
+                elif not ok:
+                    last_result = "failure"
+                    emit(f"  ⚠ 账号 {acc_user}（区: {region or '默认'}）验证码失败，加入下一轮重试", "warn")
+                    next_remaining.append(unit)
+                    continue
+
+            # ---- 领取（依赖登录成功）----
+            if "claim" in run_targets and last_result == "success":
+                _api_claim(ex, acc, region, emit)
+
+            # ---- CDK ----
+            if "cdk" in run_targets and last_result == "success":
+                if account_cdks_mode:
+                    unit_cdks = _account_active_cdks(acc, region, active_cdks)
+                else:
+                    unit_cdks = []
+                    for _c in active_cdks:
+                        if _global_cdk_limited_by_next(acc, region, _c, emit):
+                            continue
+                        unit_cdks.append(_c)
+                for cdk in unit_cdks:
+                    _check_pause(job_id, emit)
+                    _check_cancel(job_id, emit)
+                    _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=job_id)
+
+            # ---- 结果分类：成功且手动/测试入口 → 自动入库 ----
+            if last_result == "success":
+                _trig = (JOBS.get(job_id) or {}).get("trigger")
+                if _trig in ("manual", "test-redeem"):
+                    _u = acc.get("username", "")
+                    _p = acc.get("password", "")
+                    if _u and _p:
+                        try:
+                            db_upsert_account(_u, _p)
+                            _regs = acc.get("regions")
+                            if not isinstance(_regs, list) or not _regs:
+                                _r0 = acc.get("region")
+                                _regs = [_r0] if _r0 else []
+                            if _regs:
+                                db_add_account_regions(_u, _regs)
+                            emit(f"  ✓ 账号 {_u} 执行成功，已自动入库（下次执行直接走数据库配置）", "success")
+                        except Exception as _e:
+                            emit(f"  ⚠ 账号 {_u} 入库失败: {_e}", "warn")
+
+        # 本轮收尾
+        if not next_remaining:
+            emit("\n✅ 所有账号验证码都已通过")
+            remaining_units = []
+        else:
+            remaining_units = next_remaining
+            round_num += 1
+        with _ACCOUNT_RUNNING_LOCK:
+            for _u in list(_ACCOUNT_RUNNING):
+                if _ACCOUNT_RUNNING[_u] == job_id:
+                    del _ACCOUNT_RUNNING[_u]
+
+    if remaining_units:
+        emit(f"\n⚠ 经过 {MAX_CAPTCHA_ROUNDS} 轮，仍有 {len(remaining_units)} 个账号验证码失败: {[u['account'].get('username','?') for u in remaining_units]}", "warn")
+
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job:
+            job["status"] = "done"
+            job["result"] = "completed"
+    emit("\n✅ 全部完成")
+    # 持久化一次性 CDK 状态
+    try:
+        n_marked = 0
+        for cdk in cdk_list:
+            if cdk.get("schedule") == "once":
+                if db_mark_cdk_used(cdk.get("code", "")):
+                    n_marked += 1
+        if n_marked:
+            emit(f"  ✓ {n_marked} 个一次性 CDK 已标已用")
+    except Exception as e:
+        emit(f"  ⚠ 保存 CDK 状态失败: {e}", "warn")
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job:
+            job["updatedConfig"] = config
+
+
 def _run_job_impl(job_id, config, emit):
-    """要求4 并发入口：按账号分组并发执行；并发=1 或单账号时走原串行逻辑（_run_job_impl_serial）。"""
-    if not playwright:
+    """要求4 并发入口：按账号分组并发执行；并发=1 或单账号时走原串行逻辑（_run_job_impl_serial）。
+    模式：execMode = "api"（新模式，默认）/ "browser"（旧模式 Playwright）。"""
+    exec_mode = (config.get("execMode") or "api").lower()
+    if exec_mode != "api" and not playwright:
         emit("✗ Playwright 未安装，无法执行", "error")
         JOBS[job_id]["status"] = "error"
         return
@@ -2497,9 +2890,12 @@ def _run_job_impl(job_id, config, emit):
     worker_count = min(concurrency, len(groups))
     emit(f"🧵 并发数: {concurrency}，账号: {len(groups)} 个，工作线程: {worker_count}")
 
-    # 并发=1：走原串行逻辑，日志与之前完全一致
+    # 并发=1：走串行逻辑（按模式分发）
     if worker_count == 1:
-        _run_job_impl_serial(job_id, config, emit, quiet=False)
+        if exec_mode == "api":
+            _run_job_impl_serial_api(job_id, config, emit, quiet=False)
+        else:
+            _run_job_impl_serial(job_id, config, emit, quiet=False)
         return
 
     # 并行：一次性 CDK 按线程切分（互斥不重复），每日 CDK 每个线程共享全部
@@ -2508,7 +2904,10 @@ def _run_job_impl(job_id, config, emit):
     if active_cdks:
         for c in active_cdks:
             emit(f"  - [{c.get('schedule')}] {c.get('code', '')[:20]}...")
-    emit(f"🌐 启动浏览器: {browser_type} (headless={launch_kwargs['headless']})")
+    if exec_mode == "api":
+        emit("🚀 新模式（纯 HTTP 发包，无浏览器）")
+    else:
+        emit(f"🌐 启动浏览器: {browser_type} (headless={launch_kwargs['headless']})")
     emit(f"🎯 执行目标: {', '.join(run_targets)}")
 
     once_cdks = [c for c in active_cdks if c.get("schedule") == "once"]
@@ -2521,6 +2920,7 @@ def _run_job_impl(job_id, config, emit):
         "browserType": config.get("browserType"),
         "headless": config.get("headless", True),
         "accountCdks": bool(config.get("accountCdks")),   # 修复：账号级日/周/月码模式必须传给 worker，否则定时/now 的 CDK 池只剩 once，一空就一个都不跑
+        "execMode": exec_mode,
     }
 
     errors = []
@@ -2533,7 +2933,10 @@ def _run_job_impl(job_id, config, emit):
             gcfg["accounts"] = [g["account"]]
             gcfg["cdkList"] = list(w_cdks)
             try:
-                _run_job_impl_serial(job_id, gcfg, emit, quiet=True)
+                if exec_mode == "api":
+                    _run_job_impl_serial_api(job_id, gcfg, emit, quiet=True)
+                else:
+                    _run_job_impl_serial(job_id, gcfg, emit, quiet=True)
             except Exception as e:
                 with errors_lock:
                     errors.append(str(e))

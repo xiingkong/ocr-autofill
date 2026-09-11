@@ -560,6 +560,14 @@
         <button id="save">💾 保存</button>
         <span id="savedHint" class="saved-hint"></span>
         <span class="opts-sep">|</span>
+        <label class="opt-pill" title="新模式：纯HTTP发包，快且稳（无浏览器、无页面卡死），默认使用；旧模式：Playwright浏览器自动化（原方式）。两种模式共用同一套账号/区/CDK/日志逻辑">
+          执行模式
+          <select id="execModeSel" style="max-width:110px;margin-left:4px;background:var(--card,#fff);color:var(--text,#222);border:1px solid #bbb;border-radius:6px;padding:2px 4px">
+            <option value="api">新模式</option>
+            <option value="browser">旧模式</option>
+          </select>
+        </label>
+        <span class="opts-sep">|</span>
         <label class="opt-pill" title="开启：执行时优先读取数据库内该账号保存的区、CDK周期；数据库没有该账号则用本页面配置跑。关闭：只用本页面配置，不读数据库。无论开关状态，执行成功都会自动入库">
           <input type="checkbox" id="useDbConfig" checked>读数据库配置
         </label>
@@ -846,6 +854,7 @@
       return {
         domain: "newxiadan.3f8cz.com",
         ocrEndpoint: DEFAULT_OCR,
+        execMode: "api",  // api=新模式（纯HTTP发包，默认）/ browser=旧模式（Playwright）
         pages: {
           login: {
             label: "登录页",
@@ -902,6 +911,7 @@
           delete body.accounts;
           delete body.cdkList;
           delete body.runTargets;
+          delete body.execMode;  // 执行模式只存本浏览器，不共享
           await fetch(SERVER + "/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -912,6 +922,9 @@
     }
 
     // 首次访问（本浏览器无缓存）时从后端拉一份配置当模板；之后各浏览器只读自己的 localStorage
+    function syncExecModeSel() {
+      if ($("execModeSel") && currentConfig) $("execModeSel").value = (currentConfig.execMode === "browser") ? "browser" : "api";
+    }
     async function loadConfigFromServer() {
       try {
         const r = await fetch(SERVER + "/api/config");
@@ -931,6 +944,7 @@
                 currentConfig.pages[key] = JSON.parse(JSON.stringify(defPages[key]));
               }
             }
+            syncExecModeSel();
             return true;
           }
         }
@@ -949,6 +963,7 @@
       }
       if (!Array.isArray(c.accounts)) c.accounts = [];
       if (!Array.isArray(c.cdkList)) c.cdkList = [];
+      if (c.execMode !== "api" && c.execMode !== "browser") c.execMode = "api";
       return c;
     }
 
@@ -1793,6 +1808,7 @@
       }
       if (runTargets.length === 0) { showMsg("error", "请至少勾选一个执行目标（登录页、领取页 或 CDK 页）"); return; }
       cfg.runTargets = runTargets;
+      cfg.execMode = $("execModeSel") ? $("execModeSel").value : (cfg.execMode || "api");
       if (currentEs) { showMsg("error", "已有任务在跑，请先关闭"); return; }
 
       // 显示进度面板
@@ -2001,6 +2017,7 @@
       $("domainInput").value = currentConfig.domain || "";
       $("ocrEndpoint").value = currentConfig.ocrEndpoint || DEFAULT_OCR;
       $("currentDomain").textContent = currentConfig.domain || "未设置";
+      syncExecModeSel();  // 执行模式下拉同步（本地缓存路径）
       renderAccounts();
       renderCdk();
       renderPageConfig();
