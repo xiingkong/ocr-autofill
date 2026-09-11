@@ -759,7 +759,6 @@ def _predict_cnn_text(img_bytes, min_conf=None):
     min_conf = _CNN_MIN_CONF if min_conf is None else min_conf
     try:
         import io as _io
-        import torch
         import numpy as np
         from PIL import Image
         img = Image.open(_io.BytesIO(img_bytes)).convert("L")
@@ -786,6 +785,7 @@ def _predict_cnn_text(img_bytes, min_conf=None):
                 csum += float(p[idx])
                 text.append(_CHARS_CHARSET[idx])
             else:
+                import torch
                 x = torch.tensor(xnp).unsqueeze(0).unsqueeze(0)
                 with torch.no_grad():
                     out = _chars_model(x)
