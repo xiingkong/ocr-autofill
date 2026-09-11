@@ -643,6 +643,154 @@ except ImportError:
     print("[WARN] ddddocr 未安装，OCR 不可用")
     print("       pip install ddddocr")
 
+# ---------- 自定义字符 CNN（34 类：0-9A-Z 去 I/J，训练自 994 张 AI 真值） ----------
+# 优先于 ddddocr 使用；加载失败自动回退 ddddocr
+_chars_model = None
+_CHARS_CHARSET = "0123456789ABCDEFGHKLMNOPQRSTUVWXYZ"
+_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.92"))  # 平均置信低于此值→换图重试
+# 运行时识别失败样本收集：验证码错误/低置信放弃的图保存到 captcha_fail/，供二次训练
+_FAIL_DIR = os.path.join(_DATA_DIR, "captcha_fail")
+_FAIL_MAX = 2000  # 最多保留的失败样本数
+_FAIL_COUNT = 0
+_FAIL_LOCK = threading.Lock()
+
+def _load_chars_cnn():
+    global _chars_model
+    try:
+        import torch
+        sys.path.insert(0, APP_DIR)
+        try:
+            from _train_chars_cnn import CharCNN
+        except Exception:
+            import importlib.util
+            _spec = importlib.util.spec_from_file_location("_train_chars_cnn", os.path.join(APP_DIR, "_train_chars_cnn.py"))
+            _m = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_m)
+            CharCNN = _m.CharCNN
+        m = CharCNN(n_cls=len(_CHARS_CHARSET))
+        _mp = os.path.join(APP_DIR, "chars_cnn_34.pt")
+        if not os.path.exists(_mp):
+            _mp = os.path.join(_DATA_DIR, "chars_cnn_34.pt")
+        if not os.path.exists(_mp):
+            print("[WARN] 未找到字符 CNN 模型 chars_cnn_34.pt，回退 ddddocr")
+            return False
+        m.load_state_dict(torch.load(_mp, map_location="cpu"))
+        m.eval()
+        _chars_model = m
+        print("[OK] 字符 CNN 已加载（34 类，阈值 %s）: %s" % (_CNN_MIN_CONF, _mp))
+        return True
+    except Exception as e:
+        print("[WARN] 字符 CNN 加载失败，回退 ddddocr: %s" % e)
+        return False
+
+def _cnn_split_chars(img, n_chars):
+    """等宽先验 + 投影边界分割（与训练集一致）"""
+    try:
+        import numpy as np
+        a = np.array(img.convert("L"))
+        h, w = a.shape
+        b = a < 128
+        col_dark = b.sum(axis=0)
+        nz = np.nonzero(col_dark)[0]
+        if len(nz) == 0:
+            return None
+        x0, x1 = nz[0], nz[-1] + 1
+        bw = (x1 - x0) / n_chars
+        chars = []
+        for k in range(n_chars):
+            cx0 = int(x0 + k * bw)
+            cx1 = int(x0 + (k + 1) * bw)
+            seg = b[:, cx0:cx1]
+            col = seg.sum(axis=0)
+            nz2 = np.nonzero(col)[0]
+            if len(nz2) == 0:
+                chars.append(img.crop((cx0, 0, max(cx1, cx0 + 1), h)))
+                continue
+            sx0 = cx0 + nz2[0]
+            sx1 = cx0 + nz2[-1] + 1
+            sx1 = max(sx1, sx0 + 2)
+            chars.append(img.crop((sx0, 0, sx1, h)))
+        return chars
+    except Exception:
+        return None
+
+def _cnn_norm_char(im, size=(28, 28)):
+    """字符图归一化：居中、留边、缩放到统一尺寸"""
+    try:
+        from PIL import Image
+        bbox = im.convert("L").getbbox()
+        if not bbox:
+            return None
+        im2 = im.crop(bbox)
+        pad = 4
+        w, h = im2.size
+        side = max(w, h) + pad * 2
+        canvas = Image.new("L", (side, side), 255)
+        canvas.paste(im2, ((side - w) // 2, (side - h) // 2))
+        return canvas.resize(size, Image.LANCZOS)
+    except Exception:
+        return None
+
+def _predict_cnn_text(img_bytes, min_conf=None):
+    """整图 → 等宽切字 → 逐字符 CNN 预测 → 文本。
+    试 5/4 位两种切分，取平均置信度高者；低于 min_conf 返回 (None, conf)。"""
+    global _chars_model
+    if _chars_model is None:
+        return None, 0.0
+    min_conf = _CNN_MIN_CONF if min_conf is None else min_conf
+    try:
+        import io as _io
+        import torch
+        import numpy as np
+        from PIL import Image
+        img = Image.open(_io.BytesIO(img_bytes)).convert("L")
+    except Exception:
+        return None, 0.0
+    best_text, best_conf = None, 0.0
+    for n in (5, 4):
+        chars = _cnn_split_chars(img, n)
+        if not chars or len(chars) != n:
+            continue
+        text, csum, bad = [], 0.0, False
+        with torch.no_grad():
+            for ch in chars:
+                cn = _cnn_norm_char(ch)
+                if cn is None:
+                    bad = True
+                    break
+                x = torch.tensor(np.array(cn, dtype=np.float32) / 255.0).unsqueeze(0).unsqueeze(0)
+                out = _chars_model(x)
+                p = torch.softmax(out, dim=1)[0]
+                idx = int(p.argmax())
+                csum += float(p[idx])
+                text.append(_CHARS_CHARSET[idx])
+        if bad or not text:
+            continue
+        avg = csum / n
+        if avg > best_conf:
+            best_conf = avg
+            best_text = "".join(text)
+    if best_text is None or best_conf < min_conf:
+        return None, best_conf
+    return best_text, best_conf
+
+def _save_fail_sample(img_bytes, reason):
+    """保存识别失败的验证码图（验证码错误/低置信放弃），供二次训练"""
+    global _FAIL_COUNT
+    if not img_bytes or len(img_bytes) < 100:
+        return
+    try:
+        os.makedirs(_FAIL_DIR, exist_ok=True)
+        with _FAIL_LOCK:
+            _FAIL_COUNT += 1
+            if _FAIL_COUNT > _FAIL_MAX:
+                return
+            fn = time.strftime("%Y%m%d_%H%M%S") + "_" + str(_FAIL_COUNT % 100000) + "_" + reason + ".png"
+            with open(os.path.join(_FAIL_DIR, fn), "wb") as f:
+                f.write(img_bytes)
+    except Exception:
+        pass
+
 # ---------- Playwright ----------
 playwright = None
 sync_playwright = None
@@ -903,6 +1051,10 @@ def _finalize_ocr_stats(emit):
     except Exception as e:
         print(f"[WARN] 写 OCR 统计失败: {e}", flush=True)
 
+# 启动时尝试加载字符 CNN（失败不影响运行，ddddocr 兜底）
+_load_chars_cnn()
+
+
 def ocr_with_variants(img_bytes, emit=None):
     """多候选 OCR：原图 / 灰度 / 二值化 / 去噪 → 4-5 位长度校验 + 一致性投票。
     返回 (text, method)；多个方法结果一致时 method 带次数（如"灰度×2"）更可信。"""
@@ -919,6 +1071,7 @@ def ocr_with_variants(img_bytes, emit=None):
             candidates.append((t, name))
     if not candidates:
         _stats_bump("allfail")
+        _save_fail_sample(img_bytes, "allfail")
         return None, None
     good = [(t, m) for t, m in candidates if is_valid_captcha_text(t)]
     if good:
@@ -935,6 +1088,7 @@ def ocr_with_variants(img_bytes, emit=None):
         _stats_method(good[0][1])
         return good[0]
     _stats_bump("badlen")
+    _save_fail_sample(img_bytes, "badlen")
     return candidates[0]
 
 def is_valid_captcha_text(text):
@@ -946,7 +1100,11 @@ def is_valid_captcha_text(text):
     return all(c.isalnum() for c in text)
 
 def do_ocr_once(img_bytes, emit=None):
-    """单次 OCR 识别（带 try/except 保护；全局锁串行化，防并发异常）"""
+    """单次 OCR 识别：字符 CNN 优先；CNN 低置信/无输出返回 None（由调用方换图重试）。
+    ddddocr 仅作 CNN 加载失败时的兜底（老模型正确率≈0，CNN 可用时绝不落它）。
+    带 try/except 保护；全局锁串行化，防并发异常。"""
+    if _chars_model is not None:
+        return _predict_cnn_text(img_bytes)[0]
     try:
         b64 = base64.b64encode(img_bytes).decode()
         with _ocr_run_lock:
@@ -2636,10 +2794,14 @@ class _ApiExecutor:
         return ("fail", msg)
 
 
+_LAST_CAPTCHA_IMG = None  # 最近一次识别的验证码原图（供 verr 失败样本保存）
+
 def _api_recognize(ex, emit):
     """取验证码图 + 识别 → (text, method)；失败返回 (None, None)"""
+    global _LAST_CAPTCHA_IMG
     try:
         img = ex.fetch_captcha()
+        _LAST_CAPTCHA_IMG = img
         if not img:
             emit("  ⚠ 验证码图获取失败（接口未返回图片，可能被限流）", "warn")
             return None, None
@@ -2674,6 +2836,7 @@ def _api_login_with_retry(ex, acc, emit, max_attempts=5):
         if res == "captcha_error":
             emit(f"  ⚠ 验证码错误（第 {i} 次），换图重试", "warn")
             _stats_bump("verr")  # 真实正确率：提交被服务器判错
+            _save_fail_sample(_LAST_CAPTCHA_IMG, "verr")  # 失败样本收集：供二次训练
             continue
         emit(f"  ✗ 登录接口异常: {msg}", "error")
         return False, "error"
@@ -2733,6 +2896,7 @@ def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
         if res == "captcha_error":
             emit(f"  ⚠ CDK 验证码错误（第 {i} 次），换图重试", "warn")
             _stats_bump("verr")  # 真实正确率：提交被服务器判错
+            _save_fail_sample(_LAST_CAPTCHA_IMG, "verr")  # 失败样本收集：供二次训练
             continue
         break
     if res == "error" and not msg:
@@ -4385,6 +4549,8 @@ def config_cli(args):
     # OCR 模型
     beta = os.environ.get("OCR_BETA", "0") != "0"
     print(f"OCR 模型:  {'新模型 common.onnx（beta=True）' if beta else '老模型 common_old.onnx（beta=False）'}")
+    print(f"字符 CNN:   {'已加载（34 类，阈值 %s）' % _CNN_MIN_CONF if _chars_model is not None else '未加载（回退 ddddocr）'}")
+    print(f"失败样本:   {_FAIL_DIR}（运行中自动收集，供二次训练）")
     # 字符集
     _r = (os.environ.get("OCR_RANGES", "") or "").strip()
     _names = {"0": "纯数字 0-9", "1": "小写 a-z", "2": "大写 A-Z", "3": "a-z + A-Z",
