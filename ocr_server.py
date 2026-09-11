@@ -2317,6 +2317,24 @@ def do_op(page, op, account, cdk, emit):
             except Exception:
                 # 真没好就用现在的 options 继续（可能真的只有 0~1 个）
                 pass
+        # 角色下拉仍为空 → 再点一次"获取角色"按钮（#giftGetRoleList / #getRoleList），
+        # 等角色列表 AJAX 填充后再选（避免直接判卡住刷新重跑，省时且减少限流触发）
+        if selector in ("#giftRoles", "#roles") and not page.evaluate(
+                "sel => { const el = document.querySelector(sel); return el && el.options && el.options.length > 1; }", sel):
+            for _btn in ("#giftGetRoleList", "#getRoleList"):
+                try:
+                    if page.locator(_btn).count():
+                        emit(f"  ⚠ 角色下拉仍为空，重新点击 {_btn} 获取角色", "warn")
+                        _safe_click(page, _btn, emit, timeout=8000)
+                        try:
+                            page.wait_for_function(
+                                "sel => { const el = document.querySelector(sel); return el && el.options && el.options.length > 1; }",
+                                arg=sel, timeout=4000)
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    continue
         def _pick_option():
             _opts = page.eval_on_selector(sel, "el => Array.from(el.options).map(o => ({v: o.value, t: o.textContent}))")
             if val.startswith("#"):
@@ -2692,7 +2710,7 @@ def _normalize_run_targets(config):
 # ==================== 新模式：纯 HTTP 发包执行器（无浏览器） ====================
 # 与旧模式（Playwright 浏览器）平行：复用账号/区/CDK周期/并发调度/入库等全部逻辑，
 # 只把"浏览器点击"换成"直接调目标站 HTTP 接口"。
-# 模式开关：config.execMode = "browser"（旧模式 Playwright，默认）/ "api"（新模式 HTTP 发包）。
+# 模式开关：config.execMode = "api"（新模式 HTTP 发包，默认）/ "browser"（旧模式 Playwright）。
 
 _CAPTCHA_LOCK = threading.Lock()
 _last_captcha_ts = 0.0
@@ -2726,6 +2744,8 @@ class _ApiExecutor:
             "X-Requested-With": "XMLHttpRequest",
             "Origin": self.base,
         })
+        # 单元内缓存：server_id/role/gift_id 只请求一次，后续 CDK 直接复用（减少请求+限流风险）
+        self._cache = {"server": {}, "role": {}, "gift": None}
         self._init_session()
 
     def _init_session(self):
@@ -2737,65 +2757,87 @@ class _ApiExecutor:
     def fetch_captcha(self):
         """获取验证码图。接口在并发/风控下可能返回 JSON 而非图片，校验 magic bytes，
         非图片退避重试（最多 3 次），仍失败返回 None（由上层处理）。"""
-        for _ in range(3):
+        for _ in range(4):
             _throttle_captcha()  # 全局节流，防并发限流
-            r = self.s.get(self.base + f"/index/captcha?v={random.random()}",
-                           headers={"Referer": self.base + "/index/cdk"}, timeout=15)
-            c = r.content
+            try:
+                r = self.s.get(self.base + f"/index/captcha?v={random.random()}",
+                               headers={"Referer": self.base + "/index/cdk"}, timeout=15)
+                c = r.content
+            except Exception:
+                time.sleep(2.0)
+                continue
             if c[:4] == b"\x89PNG" or c[:2] == b"\xff\xd8" or c[:3] == b"GIF" or c[:2] == b"BM":
                 return c
-            time.sleep(1.5)
+            time.sleep(2.0)
         return None
 
     def login(self, account, password, captcha):
+        if not account or not password or not captcha:
+            return ("fail", "参数缺失，跳过提交")
         r = self.s.post(self.base + "/api/player/login",
                         files={"account": (None, account), "password": (None, password), "captcha": (None, captcha)},
                         timeout=15)
         return self._parse_result(r)
 
     def get_server_id(self, region):
-        """汉字区名（如"六区"）→ serverID（如"6"）；无区返回 None"""
+        """汉字区名（如"六区"）→ serverID（如"6"）；无区返回 None。结果按区缓存。"""
         if not region:
             return None
+        if region in self._cache["server"]:
+            return self._cache["server"][region]
         r = self.s.get(self.base + "/api/game/server-list", timeout=15)
         j = r.json()
         for sv in (j.get("data") or []):
             if str(sv.get("name")) == region:
-                return str(sv.get("server"))
+                self._cache["server"][region] = str(sv.get("server"))
+                return self._cache["server"][region]
         return None
 
     def get_role(self, server_id, account):
         if not server_id:
             return None
+        _k = (server_id, account)
+        if _k in self._cache["role"]:
+            return self._cache["role"][_k]
         r = self.s.post(self.base + "/api/game/role-list",
                         files={"serverID": (None, server_id), "account": (None, account)}, timeout=15)
         j = r.json()
         data = j.get("data") or {}
         roles = list(data.values()) if isinstance(data, dict) else (data or [])
-        if not roles:
-            return None
-        first = roles[0]
-        if isinstance(first, dict):
-            return str(first.get("roleID") or first.get("name") or "")
-        return str(first)
+        _role = None
+        if roles:
+            first = roles[0]
+            if isinstance(first, dict):
+                _role = str(first.get("roleID") or first.get("name") or "")
+            else:
+                _role = str(first)
+        self._cache["role"][_k] = _role  # None 也缓存，避免重复请求
+        return _role
 
     def get_gift_id(self):
-        """0 元购礼包的 giftID（recharge-list 里 isGift=true 且 money=0 的那条）"""
+        """0 元购礼包的 giftID（recharge-list 里 isGift=true 且 money=0 的那条）。结果缓存。"""
+        if self._cache.get("gift"):
+            return self._cache["gift"]
         r = self.s.get(self.base + "/api/player/recharge-list", timeout=15)
         j = r.json()
         for g in (j.get("data") or []):
             money = str(g.get("money") or "0").strip()
             if g.get("isGift") and money in ("0", "0.00", "0.0", ""):
-                return str(g.get("id"))
+                self._cache["gift"] = str(g.get("id"))
+                return self._cache["gift"]
         return None
 
     def claim(self, server_id, account, role, gift_id):
+        if not server_id or not account or not role or not gift_id:
+            return ("fail", "参数缺失，跳过提交")
         r = self.s.post(self.base + "/api/player/gift-claim",
                         files={"serverID": (None, server_id), "account": (None, account),
                                "role": (None, role), "giftID": (None, gift_id)}, timeout=15)
         return self._parse_result(r)
 
     def redeem_cdk(self, server_id, account, role, cdk_code, captcha):
+        if not server_id or not account or not role or not cdk_code or not captcha:
+            return ("fail", "参数缺失，跳过提交")
         r = self.s.post(self.base + "/api/game/cdk",
                         files={"serverID": (None, server_id), "account": (None, account),
                                "role": (None, role), "cdk": (None, cdk_code), "captcha": (None, captcha)},
@@ -2804,9 +2846,15 @@ class _ApiExecutor:
 
     def _parse_result(self, r):
         """统一解析接口返回 → (result, msg)
-        result: ok / captcha_error / wrong_pwd / limit / fail / error
+        result: ok / captcha_error / wrong_pwd / limit / fail / error / error_bad_request
         注意：state=true 不代表业务成功（CDK 接口常返回 {"state":true,"data":"验证码错误！"}），
-        data 里的错误关键词优先判断。"""
+        data 里的错误关键词优先判断。
+        error_bad_request：HTTP 4xx/5xx（如"缺少参数"），上层应换图重试（多为风控/瞬态）"""
+        if r.status_code >= 400:
+            _txt = r.text[:150]
+            if "缺少" in _txt or "Bad Request" in _txt or "required" in _txt.lower():
+                return ("error_bad_request", _txt)
+            return ("error", _txt)
         try:
             j = r.json()
         except Exception:
@@ -2823,26 +2871,23 @@ class _ApiExecutor:
         return ("fail", msg)
 
 
-_LAST_CAPTCHA_IMG = None  # 最近一次识别的验证码原图（供 verr 失败样本保存）
-
 def _api_recognize(ex, emit):
-    """取验证码图 + 识别 → (text, method)；失败返回 (None, None)"""
-    global _LAST_CAPTCHA_IMG
+    """取验证码图 + 识别 → (text, method, img)；失败返回 (None, None, None)。
+    img 由调用方传给失败样本收集，线程隔离（多账号并发不串图）。"""
     try:
         img = ex.fetch_captcha()
-        _LAST_CAPTCHA_IMG = img
         if not img:
             emit("  ⚠ 验证码图获取失败（接口未返回图片，可能被限流）", "warn")
-            return None, None
+            return None, None, None
     except Exception as e:
         emit(f"  ⚠ 获取验证码失败: {e}", "warn")
-        return None, None
+        return None, None, None
     try:
         text, method = ocr_with_variants(img, emit)
     except Exception as e:
         emit(f"  [OCR] 识别异常: {e}", "warn")
-        return None, None
-    return text, method
+        return None, None, None
+    return text, method, img
 
 
 def _api_login_with_retry(ex, acc, emit, max_attempts=5):
@@ -2851,7 +2896,7 @@ def _api_login_with_retry(ex, acc, emit, max_attempts=5):
     user = acc.get("username", "")
     pwd = acc.get("password", "")
     for i in range(1, max_attempts + 1):
-        text, method = _api_recognize(ex, emit)
+        text, method, img = _api_recognize(ex, emit)
         if not text or not is_valid_captcha_text(text):
             emit(f"  ⚠ 验证码识别无效（第 {i} 次），换图重试", "warn")
             continue
@@ -2862,10 +2907,11 @@ def _api_login_with_retry(ex, acc, emit, max_attempts=5):
             return True, None
         if res == "wrong_pwd":
             return False, "wrong_pwd"
-        if res == "captcha_error":
-            emit(f"  ⚠ 验证码错误（第 {i} 次），换图重试", "warn")
-            _stats_bump("verr")  # 真实正确率：提交被服务器判错
-            _save_fail_sample(_LAST_CAPTCHA_IMG, "verr")  # 失败样本收集：供二次训练
+        if res in ("captcha_error", "error_bad_request"):
+            if res == "captcha_error":
+                _stats_bump("verr")  # 真实正确率：提交被服务器判错
+            emit(f"  ⚠ {'验证码错误' if res == 'captcha_error' else '接口异常(Bad Request)'}（第 {i} 次），换图重试", "warn")
+            _save_fail_sample(img, "verr")  # 失败样本收集：供二次训练
             continue
         emit(f"  ✗ 登录接口异常: {msg}", "error")
         return False, "error"
@@ -2916,16 +2962,17 @@ def _api_redeem_cdk(ex, acc, region, cdk, emit, job_id=None, max_attempts=5):
         return
     res, msg = "error", ""
     for i in range(1, max_attempts + 1):
-        text, method = _api_recognize(ex, emit)
+        text, method, img = _api_recognize(ex, emit)
         if not text or not is_valid_captcha_text(text):
             emit(f"  ⚠ CDK 验证码识别无效（第 {i} 次），换图重试", "warn")
             continue
         emit(f"  ✓ OCR 识别 ({method or '原图'}): {text}")
         res, msg = ex.redeem_cdk(server_id, user, role, code, text)
-        if res == "captcha_error":
-            emit(f"  ⚠ CDK 验证码错误（第 {i} 次），换图重试", "warn")
-            _stats_bump("verr")  # 真实正确率：提交被服务器判错
-            _save_fail_sample(_LAST_CAPTCHA_IMG, "verr")  # 失败样本收集：供二次训练
+        if res in ("captcha_error", "error_bad_request"):
+            if res == "captcha_error":
+                _stats_bump("verr")  # 真实正确率：提交被服务器判错
+            emit(f"  ⚠ CDK {'验证码错误' if res == 'captcha_error' else '接口异常(Bad Request)'}（第 {i} 次），换图重试", "warn")
+            _save_fail_sample(img, "verr")  # 失败样本收集：供二次训练
             continue
         break
     if res == "error" and not msg:
@@ -3140,8 +3187,8 @@ def _run_job_impl_serial_api(job_id, config, emit, quiet=False):
 
 def _run_job_impl(job_id, config, emit):
     """要求4 并发入口：按账号分组并发执行；并发=1 或单账号时走原串行逻辑（_run_job_impl_serial）。
-    模式：execMode = "browser"（旧模式 Playwright，默认）/ "api"（新模式 HTTP 发包）。"""
-    exec_mode = (config.get("execMode") or "browser").lower()
+    模式：execMode = "api"（新模式 HTTP 发包，默认）/ "browser"（旧模式 Playwright）。"""
+    exec_mode = (config.get("execMode") or "api").lower()
     if exec_mode != "api" and not playwright:
         emit("✗ Playwright 未安装，无法执行", "error")
         JOBS[job_id]["status"] = "error"
@@ -4681,6 +4728,194 @@ def run_now_cli(args):
         return 1
 
 
+def _menu_pause():
+    try:
+        input("\n按回车返回菜单...")
+    except (EOFError, KeyboardInterrupt):
+        raise
+
+def _menu_tail(path, n=40):
+    """读文件末尾 n 行（二进制安全）"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 16384))
+            data = f.read().decode("utf-8", "replace")
+        lines = data.splitlines()
+        return lines[-n:]
+    except Exception:
+        return None
+
+def _menu_run_now():
+    """后台执行总跑（nohup 脱离终端），日志 /tmp/ocr_now.log"""
+    import subprocess
+    log_path = "/tmp/ocr_now.log"
+    script = os.path.abspath(__file__)
+    try:
+        with open(log_path, "ab") as lf:
+            lf.write(("\n===== 菜单触发总跑 %s =====\n" % time.strftime("%Y-%m-%d %H:%M:%S")).encode("utf-8"))
+            p = subprocess.Popen(
+                [sys.executable, script, "now"],
+                stdout=lf, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, start_new_session=True,
+            )
+        print("  ✓ 总跑已在后台启动 (PID %s)" % p.pid)
+        print("    日志: %s" % log_path)
+        print("    查看: tail -f %s" % log_path)
+    except Exception as e:
+        print("  ✗ 后台启动失败: %s" % e)
+        print("    可手动执行: nohup python3 ocr_server.py now > /tmp/ocr_now.log 2>&1 &")
+
+def _menu_cdk():
+    """CDK 二级菜单"""
+    while True:
+        print("\n--- CDK 管理 ---")
+        print("  1. 列出 CDK")
+        print("  2. 添加每日 CDK（多个用空格分隔）")
+        print("  3. 添加一次性 CDK（多个用空格分隔）")
+        print("  4. 删除 CDK")
+        print("  5. 重置单个 CDK（改为未用）")
+        print("  6. 重置全部每日 CDK")
+        print("  0. 返回主菜单")
+        try:
+            ch = input("请选择: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if ch == "0":
+            return
+        if ch == "1":
+            cdk_cli(["list"])
+        elif ch == "2":
+            codes = input("输入每日 CDK（空格分隔）: ").strip().split()
+            if codes:
+                cdk_cli(["add-daily"] + codes)
+        elif ch == "3":
+            codes = input("输入一次性 CDK（空格分隔）: ").strip().split()
+            if codes:
+                cdk_cli(["add-once"] + codes)
+        elif ch == "4":
+            codes = input("输入要删除的 CDK（空格分隔）: ").strip().split()
+            if codes:
+                cdk_cli(["remove"] + codes)
+        elif ch == "5":
+            codes = input("输入要重置的 CDK（空格分隔）: ").strip().split()
+            if codes:
+                cdk_cli(["reset"] + codes)
+        elif ch == "6":
+            print("重置全部每日 CDK 为未用...")
+            cdk_cli(["reset-all"])
+        else:
+            print("  ✗ 无效选项")
+        _menu_pause()
+
+def _menu_account():
+    """账号二级菜单"""
+    while True:
+        print("\n--- 账号管理 ---")
+        print("  1. 列出账号")
+        print("  2. 添加账号（<账号> <密码>）")
+        print("  3. 删除账号")
+        print("  0. 返回主菜单")
+        try:
+            ch = input("请选择: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if ch == "0":
+            return
+        if ch == "1":
+            account_cli(["list"])
+        elif ch == "2":
+            u = input("账号: ").strip()
+            p = input("密码: ").strip()
+            if u and p:
+                account_cli(["add", u, p])
+        elif ch == "3":
+            u = input("要删除的账号: ").strip()
+            if u:
+                account_cli(["remove", u])
+        else:
+            print("  ✗ 无效选项")
+        _menu_pause()
+
+def menu_cli(args):
+    """交互式终端菜单：收纳常用指令，不用记命令。
+    用法: python3 ocr_server.py menu"""
+    _init_db()
+    print("\n欢迎使用 OCR 自动兑换控制台（菜单模式）")
+    while True:
+        print("\n" + "=" * 48)
+        print("   OCR 自动兑换 · 控制台菜单")
+        print("=" * 48)
+        print("  1. ▶  立即总跑（后台执行，不依赖终端）")
+        print("  2. ⚙  查看当前配置（模型/并发/定时）")
+        print("  3. 📊 查看验证码识别统计")
+        print("  4. 📜 查看最近一次总跑日志（尾部）")
+        print("  5. 🎫 CDK 管理（增/删/查/重置）")
+        print("  6. 👤 账号管理（列/增/删）")
+        print("  7. 🚦 并发数设置")
+        print("  8. 🔁 重启服务（ocr-restart）")
+        print("  0. 🚪 退出")
+        print("-" * 48)
+        try:
+            ch = input("请选择: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n退出")
+            return 0
+        if ch == "0":
+            print("退出")
+            return 0
+        if ch == "1":
+            _menu_run_now()
+        elif ch == "2":
+            config_cli([])
+        elif ch == "3":
+            stats_cli([])
+        elif ch == "4":
+            lines = _menu_tail("/tmp/ocr_now.log")
+            if lines is None:
+                print("  - 还没有 /tmp/ocr_now.log（先跑一次总跑）")
+            else:
+                print("\n--- /tmp/ocr_now.log 末尾 ---")
+                for ln in lines:
+                    print(ln)
+        elif ch == "5":
+            _menu_cdk()
+            continue
+        elif ch == "6":
+            _menu_account()
+            continue
+        elif ch == "7":
+            try:
+                print("当前并发数: %s（默认 3）" % get_concurrency())
+                n = input("输入新并发数（>=1，回车取消）: ").strip()
+                if n:
+                    concurrency_cli([n])
+            except (EOFError, KeyboardInterrupt):
+                print()
+        elif ch == "8":
+            print("  - 重启服务: ocr-restart")
+            print("    （git pull + 杀旧进程 + nohup 重启，日志 /tmp/ocr_server.log）")
+            try:
+                r = input("    现在执行? (y/N): ").strip().lower()
+                if r in ("y", "yes"):
+                    os.system("ocr-restart")
+                    print("    已发起重启，稍后重新打开本菜单")
+                    return 0
+            except (EOFError, KeyboardInterrupt):
+                print()
+        else:
+            print("  ✗ 无效选项，请输入 0-8")
+            continue
+        try:
+            _menu_pause()
+        except (EOFError, KeyboardInterrupt):
+            print("\n退出")
+            return 0
+
+
 if __name__ == '__main__':
     # CLI 模式：python ocr_server.py cdk ... / account ... / cc ...
     if len(sys.argv) >= 2 and sys.argv[1] == "cdk":
@@ -4697,4 +4932,6 @@ if __name__ == '__main__':
         sys.exit(config_cli(sys.argv[2:]))
     if len(sys.argv) >= 2 and sys.argv[1] == "now":
         sys.exit(run_now_cli(sys.argv[2:]))
+    if len(sys.argv) >= 2 and sys.argv[1] in ("menu", "m"):
+        sys.exit(menu_cli(sys.argv[2:]))
     main()
