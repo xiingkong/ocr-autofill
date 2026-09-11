@@ -3212,6 +3212,7 @@ def _run_job_impl_serial(job_id, config, emit, quiet=False):
                         region = unit["region"]
                         acc_user = acc.get("username", "?")
                         # 账号级防重：同一账号正在被其他任务操作 → 本轮跳过（防两批入口同时跑同一账号）
+                        _cleanup_stale_account_locks()
                         with _ACCOUNT_RUNNING_LOCK:
                             _holder = _ACCOUNT_RUNNING.get(acc_user)
                             if _holder and _holder != job_id:
