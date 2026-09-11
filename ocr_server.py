@@ -648,7 +648,7 @@ except ImportError:
 _chars_model = None
 _onnx_session = None  # onnxruntime 推理会话（服务器免装 torch 的轻量路径，优先使用）
 _CHARS_CHARSET = "0123456789ABCDEFGHKLMNOPQRSTUVWXYZ"
-_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.78"))  # 阈值扫描：0.78 最优（73.7% vs 0.92 的 40.4%），v1 基线为泄漏虚高
+_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.92"))  # 线上实测 V1@0.92 优于 V2@0.78/0.88（verr 7.5 vs 13/11），回滚默认
 # 运行时识别失败样本收集：验证码错误/低置信放弃的图保存到 captcha_fail/，供二次训练
 _FAIL_DIR = os.path.join(_DATA_DIR, "captcha_fail")
 _FAIL_MAX = 2000  # 最多保留的失败样本数
@@ -1026,11 +1026,13 @@ def preprocess_denoise(img_bytes, scale=2):
 _ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "verr": 0, "method_hits": {}}
 _ocr_stats_lock = threading.Lock()
 _ocr_run_lock = threading.Lock()   # ddddocr 实例多线程并发保护（部分平台 onnxruntime 并发异常）
+_job_start_ts = 0.0                # 本轮任务开始时间戳（统计"总耗时"用）
 
 def _reset_ocr_stats():
-    global _ocr_stats
+    global _ocr_stats, _job_start_ts
     with _ocr_stats_lock:
         _ocr_stats = {"total": 0, "ok": 0, "allfail": 0, "badlen": 0, "method_hits": {}}
+    _job_start_ts = time.time()
 
 def _stats_bump(key, n=1):
     with _ocr_stats_lock:
@@ -1052,6 +1054,8 @@ def _finalize_ocr_stats(emit):
     total = st.get("total", 0) or 0
     ok = st.get("ok", 0) or 0
     verr = st.get("verr", 0) or 0
+    duration = int(time.time() - _job_start_ts) if _job_start_ts else 0
+    dur_str = "%d分%d秒" % (duration // 60, duration % 60)
     real_total = ok                       # 真实正确率总数 = 识别出 4-5 位合法结果的次数
     real_ok = max(ok - verr, 0)           # 真实正确成功 = 总数 - 验证码错误次数
     stats = {
@@ -1062,16 +1066,17 @@ def _finalize_ocr_stats(emit):
         "allfail": st.get("allfail", 0) or 0,
         "badlen": st.get("badlen", 0) or 0,
         "verr": verr,
+        "duration": duration,
         "real_total": real_total,
         "real_ok": real_ok,
         "real_rate": round(real_ok * 100.0 / real_total, 1) if real_total else 0.0,
         "method_hits": st.get("method_hits", {}) or {},
     }
     try:
-        emit("📊 验证码识别统计：识别合法 {ok}/{total}（{rate}%）｜真实正确 {real_ok}/{real_total}（{real_rate}%，扣验证码错误 {verr}）｜全失败 {allfail}｜长度异常 {badlen}｜方法命中 {hits}".format(
+        emit("📊 验证码识别统计：识别合法 {ok}/{total}（{rate}%）｜真实正确 {real_ok}/{real_total}（{real_rate}%，扣验证码错误 {verr}）｜全失败 {allfail}｜长度异常 {badlen}｜耗时 {dur}｜方法命中 {hits}".format(
             ok=stats["ok"], total=stats["total"], rate=stats["rate"],
             real_ok=stats["real_ok"], real_total=stats["real_total"], real_rate=stats["real_rate"], verr=stats["verr"],
-            allfail=stats["allfail"], badlen=stats["badlen"],
+            allfail=stats["allfail"], badlen=stats["badlen"], dur=dur_str,
             hits=json.dumps(stats["method_hits"], ensure_ascii=False)), "info")
         with open(OCR_STATS_FILE, "w", encoding="utf-8") as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
@@ -4633,6 +4638,8 @@ def stats_cli(args):
         print(f"  识别成功率: {last.get('rate')}%  （{last.get('ok')}/{last.get('total')}）")
         print(f"  真实正确率: {last.get('real_rate')}%  （{last.get('real_ok')}/{last.get('real_total')}，扣验证码错误 {last.get('verr')}）")
         print(f"  全失败:   {last.get('allfail')}   长度异常: {last.get('badlen')}")
+        if last.get('duration'):
+            print(f"  本轮耗时: {last['duration'] // 60}分{last['duration'] % 60}秒")
         print(f"  方法命中: {json.dumps(last.get('method_hits', {}), ensure_ascii=False)}")
     except FileNotFoundError:
         print("还没有统计记录（先跑一轮任务，任务结束自动落盘）")
@@ -4645,7 +4652,8 @@ def stats_cli(args):
             for l in lines[-n:]:
                 try:
                     d = json.loads(l)
-                    print(f"  {d.get('time', '')}  识别成功率 {d.get('rate')}%  ({d.get('ok')}/{d.get('total')})  真实正确率 {d.get('real_rate')}%  ({d.get('real_ok')}/{d.get('real_total')}, 错{d.get('verr')})")
+                    dur = ("  耗时 %d分%d秒" % (d['duration'] // 60, d['duration'] % 60)) if d.get('duration') else ""
+                    print(f"  {d.get('time', '')}  识别成功率 {d.get('rate')}%  ({d.get('ok')}/{d.get('total')})  真实正确率 {d.get('real_rate')}%  ({d.get('real_ok')}/{d.get('real_total')}, 错{d.get('verr')}){dur}")
                 except Exception:
                     pass
     except Exception:
