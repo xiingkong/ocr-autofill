@@ -648,7 +648,7 @@ except ImportError:
 _chars_model = None
 _onnx_session = None  # onnxruntime 推理会话（服务器免装 torch 的轻量路径，优先使用）
 _CHARS_CHARSET = "0123456789ABCDEFGHKLMNOPQRSTUVWXYZ"
-_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.92"))  # 线上实测 V1@0.92 优于 V2@0.78/0.88（verr 7.5 vs 13/11），回滚默认
+_CNN_MIN_CONF = float(os.environ.get("OCR_CNN_MIN_CONF", "0.86"))  # 线上实测 V1@0.92 优于 V2@0.78/0.88（verr 7.5 vs 13/11），回滚默认
 # 运行时识别失败样本收集：验证码错误/低置信放弃的图保存到 captcha_fail/，供二次训练
 _FAIL_DIR = os.path.join(_DATA_DIR, "captcha_fail")
 _FAIL_MAX = 2000  # 最多保留的失败样本数
@@ -2169,7 +2169,8 @@ def cdk_active_today(cdk):
     schedule = cdk.get("schedule", "daily")
     start = cdk.get("startDate", "")
     if not start:
-        return schedule != "once"  # 无起始日期的 daily/weekly/monthly 都跑
+        # 无起始日期：daily/weekly/monthly 都跑；一次性（once）未用即跑（已用由上方 used+once 分支拦截）
+        return True
     try:
         from datetime import date
         s = date.fromisoformat(start)
@@ -2628,7 +2629,7 @@ def _build_scheduled_config():
     cfg["cdkList"] = []
     for c in db_get_cdks():
         if c["once"]:
-            cfg["cdkList"].append({"code": c["code"], "schedule": "once", "used": False, "_db_id": c["id"]})
+            cfg["cdkList"].append({"code": c["code"], "schedule": "once", "used": bool(c["used"]), "_db_id": c["id"]})
     cfg["accountCdks"] = True
     return cfg
 
@@ -4227,6 +4228,11 @@ class Handler(BaseHTTPRequestHandler):
                     cfg["accounts"] = _accs
                 # 任务2：统一走账号级 CDK（每账号日/周/月码 + once 池），不再用前端本地全局池
                 cfg["accountCdks"] = True
+                # 手动 run 也合并全局一次性 CDK 池（db 里 once=1 的码，未用的进本轮）
+                _once_db = [{"code": c["code"], "schedule": "once", "used": bool(c["used"]), "_db_id": c["id"]}
+                            for c in db_get_cdks() if c["once"]]
+                if _once_db:
+                    cfg["cdkList"] = (cfg.get("cdkList") or []) + _once_db
                 jid = uuid.uuid4().hex
                 # 保存最新 config 给定时任务用
                 global LAST_CONFIG
